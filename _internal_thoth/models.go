@@ -43,9 +43,9 @@ const (
 type DecisionType string
 
 const (
-	DecisionAllow   DecisionType = "allow"
-	DecisionBlock   DecisionType = "block"
-	DecisionStepUp  DecisionType = "step_up"
+	DecisionAllow   DecisionType = "ALLOW"
+	DecisionBlock   DecisionType = "BLOCK"
+	DecisionStepUp  DecisionType = "STEP_UP"
 	DecisionObserve DecisionType = "observe"
 )
 
@@ -90,6 +90,20 @@ type EnforcementDecision struct {
 	Reason      string       `json:"reason,omitempty"`
 	ViolationID string       `json:"violation_id,omitempty"`
 	HoldToken   string       `json:"hold_token,omitempty"`
+	RiskScore   float64      `json:"risk_score,omitempty"`
+	LatencyMs   float64      `json:"latency_ms,omitempty"`
+}
+
+// CheckRequest contains all fields needed by the enforcer to produce a policy decision.
+type CheckRequest struct {
+	ToolName         string
+	SessionID        string
+	AgentID          string
+	TenantID         string
+	UserID           string
+	ApprovedScope    []string
+	EnforcementMode  EnforcementMode
+	SessionToolCalls []string
 }
 
 // Emitter is the interface for behavioral event emission backends.
@@ -102,10 +116,12 @@ type Emitter interface {
 type Config struct {
 	// AgentID is the unique identifier for this agent instance.
 	AgentID string
-	// ApprovedScope lists the tool names this agent is authorized to call.
-	ApprovedScope []string
 	// TenantID is the customer tenant this agent operates under.
 	TenantID string
+	// UserID identifies the user on whose behalf the agent is acting.
+	UserID string
+	// ApprovedScope lists the tool names this agent is authorized to call.
+	ApprovedScope []string
 	// Enforcement controls the response mode on policy violations.
 	Enforcement EnforcementMode
 	// EnforcerURL is the base URL of the enforcement service. Defaults to "http://enforcer:8080".

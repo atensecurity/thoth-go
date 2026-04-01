@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,7 +86,7 @@ func TestNewClientFromEnv_EmptyEnv(t *testing.T) {
 // TestWrapToolAllow verifies that when the enforcer returns ALLOW, the wrapped
 // tool executes normally and returns the tool's result.
 func TestWrapToolAllow(t *testing.T) {
-	srv := mockEnforcer(t, enforcerResponse{Decision: "allow"})
+	srv := mockEnforcer(t, enforcerResponse{Decision: "ALLOW"})
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
@@ -112,7 +113,7 @@ func TestWrapToolAllow(t *testing.T) {
 // tool is not executed and a *PolicyViolationError is returned.
 func TestWrapToolBlock(t *testing.T) {
 	srv := mockEnforcer(t, enforcerResponse{
-		Decision:    "block",
+		Decision:    "BLOCK",
 		Reason:      "unauthorized data exfiltration",
 		ViolationID: "v-001",
 	})
@@ -158,16 +159,16 @@ func TestWrapToolBlock(t *testing.T) {
 func TestWrapToolStepUp(t *testing.T) {
 	// The step-up endpoint always returns 202 to simulate pending approval.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/check":
+		switch {
+		case r.URL.Path == "/v1/enforce":
 			// Return STEP_UP on the enforce check.
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(enforcerResponse{
-				Decision:  "step_up",
+				Decision:  "STEP_UP",
 				HoldToken: "tok-abc",
 				Reason:    "high-risk tool call",
 			})
-		case "/v1/step-up":
+		case strings.HasPrefix(r.URL.Path, "/v1/enforce/hold/"):
 			// Simulate pending approval — never resolves.
 			w.WriteHeader(http.StatusAccepted)
 		default:
@@ -249,7 +250,7 @@ func TestWrapToolEnforcerDown(t *testing.T) {
 
 // TestWrapToolFunc verifies the map-based variant delegates correctly.
 func TestWrapToolFunc(t *testing.T) {
-	srv := mockEnforcer(t, enforcerResponse{Decision: "allow"})
+	srv := mockEnforcer(t, enforcerResponse{Decision: "ALLOW"})
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
@@ -271,7 +272,7 @@ func TestWrapToolFunc(t *testing.T) {
 
 // TestStartSession verifies that a session can be created and closed without error.
 func TestStartSession(t *testing.T) {
-	srv := mockEnforcer(t, enforcerResponse{Decision: "allow"})
+	srv := mockEnforcer(t, enforcerResponse{Decision: "ALLOW"})
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
@@ -303,7 +304,7 @@ func TestStartSession(t *testing.T) {
 
 // TestStartSessionWithExplicitID verifies that a caller-supplied session ID is honored.
 func TestStartSessionWithExplicitID(t *testing.T) {
-	srv := mockEnforcer(t, enforcerResponse{Decision: "allow"})
+	srv := mockEnforcer(t, enforcerResponse{Decision: "ALLOW"})
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)

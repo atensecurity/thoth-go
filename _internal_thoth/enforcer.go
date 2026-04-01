@@ -8,14 +8,23 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const defaultEnforcerTimeout = 5 * time.Second
 
 type enforcerRequest struct {
-	ToolName  string   `json:"tool_name"`
-	SessionID string   `json:"session_id"`
-	ToolCalls []string `json:"tool_calls"`
+	RequestID        string          `json:"request_id"`
+	AgentID          string          `json:"agent_id"`
+	TenantID         string          `json:"tenant_id"`
+	ToolName         string          `json:"tool_name"`
+	SessionID        string          `json:"session_id"`
+	UserID           string          `json:"user_id"`
+	ApprovedScope    []string        `json:"approved_scope"`
+	SessionToolCalls []string        `json:"session_tool_calls"`
+	EnforcementMode  EnforcementMode `json:"enforcement_mode"`
+	OccurredAt       time.Time       `json:"occurred_at"`
 }
 
 // EnforcerClient calls the Thoth enforcement service to obtain a pre-execution decision.
@@ -41,15 +50,26 @@ func (c *EnforcerClient) Timeout() time.Duration {
 
 var allowDecision = EnforcementDecision{Decision: DecisionAllow}
 
-// Check sends toolName and session context to the enforcer and returns its decision.
-func (c *EnforcerClient) Check(ctx context.Context, toolName, sessionID string, toolCalls []string) (EnforcementDecision, error) {
-	reqBody := enforcerRequest{ToolName: toolName, SessionID: sessionID, ToolCalls: toolCalls}
+// Check sends a CheckRequest to the enforcer and returns its decision.
+func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (EnforcementDecision, error) {
+	reqBody := enforcerRequest{
+		RequestID:        uuid.New().String(),
+		AgentID:          check.AgentID,
+		TenantID:         check.TenantID,
+		ToolName:         check.ToolName,
+		SessionID:        check.SessionID,
+		UserID:           check.UserID,
+		ApprovedScope:    check.ApprovedScope,
+		SessionToolCalls: check.SessionToolCalls,
+		EnforcementMode:  check.EnforcementMode,
+		OccurredAt:       time.Now().UTC(),
+	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
 		return allowDecision, fmt.Errorf("thoth: enforcer marshal: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/check", bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/enforce", bytes.NewReader(buf))
 	if err != nil {
 		return allowDecision, fmt.Errorf("thoth: enforcer request build: %w", err)
 	}

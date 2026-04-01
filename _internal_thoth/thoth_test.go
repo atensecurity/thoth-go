@@ -35,7 +35,7 @@ func TestInstrument_RegistersWrappedTools(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"decision":"allow"}`))
+		_, _ = w.Write([]byte(`{"decision":"ALLOW"}`))
 	}))
 	defer srv.Close()
 
@@ -110,7 +110,7 @@ func TestInstrument_BlockedTool_ReturnsPolicyViolationError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"decision":"block","reason":"out of scope"}`))
+		_, _ = w.Write([]byte(`{"decision":"BLOCK","reason":"out of scope"}`))
 	}))
 	defer srv.Close()
 

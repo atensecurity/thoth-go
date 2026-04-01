@@ -56,9 +56,9 @@ func TestEventTypeConstants(t *testing.T) {
 func TestDecisionTypeConstants(t *testing.T) {
 	t.Parallel()
 	cases := map[thoth.DecisionType]string{
-		thoth.DecisionAllow:   "allow",
-		thoth.DecisionBlock:   "block",
-		thoth.DecisionStepUp:  "step_up",
+		thoth.DecisionAllow:   "ALLOW",
+		thoth.DecisionBlock:   "BLOCK",
+		thoth.DecisionStepUp:  "STEP_UP",
 		thoth.DecisionObserve: "observe",
 	}
 	for k, want := range cases {

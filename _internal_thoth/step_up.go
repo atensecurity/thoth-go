@@ -59,7 +59,7 @@ func (c *StepUpClient) Wait(ctx context.Context, holdToken string) EnforcementDe
 }
 
 func (c *StepUpClient) poll(ctx context.Context, holdToken string) (EnforcementDecision, bool) {
-	url := fmt.Sprintf("%s/v1/step-up?token=%s", c.baseURL, holdToken)
+	url := fmt.Sprintf("%s/v1/enforce/hold/%s", c.baseURL, holdToken)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		log.Printf("thoth: warn: step-up poll request build: %v", err)

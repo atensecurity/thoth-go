@@ -30,7 +30,9 @@ func TestEnforcerClient_CheckReturnsAllow(t *testing.T) {
 	defer srv.Close()
 
 	client := thoth.NewEnforcerClient(srv.URL, "")
-	dec, err := client.Check(context.Background(), "read_file", "sess-1", []string{"read_file"})
+	dec, err := client.Check(context.Background(), thoth.CheckRequest{
+		ToolName: "read_file", SessionID: "sess-1", SessionToolCalls: []string{"read_file"},
+	})
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -46,7 +48,9 @@ func TestEnforcerClient_CheckReturnsBlock(t *testing.T) {
 	defer srv.Close()
 
 	client := thoth.NewEnforcerClient(srv.URL, "")
-	dec, err := client.Check(context.Background(), "delete_db", "sess-1", []string{"read_file"})
+	dec, err := client.Check(context.Background(), thoth.CheckRequest{
+		ToolName: "delete_db", SessionID: "sess-1", SessionToolCalls: []string{"read_file"},
+	})
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -66,7 +70,7 @@ func TestEnforcerClient_NetworkErrorFallsBackToAllow(t *testing.T) {
 	srv.Close()
 
 	client := thoth.NewEnforcerClient(srv.URL, "")
-	dec, err := client.Check(context.Background(), "any_tool", "sess-1", nil)
+	dec, err := client.Check(context.Background(), thoth.CheckRequest{ToolName: "any_tool", SessionID: "sess-1"})
 
 	// Non-fatal: error returned but decision is ALLOW so agent keeps running.
 	if err == nil {
@@ -83,7 +87,7 @@ func TestEnforcerClient_Non200FallsBackToAllow(t *testing.T) {
 	defer srv.Close()
 
 	client := thoth.NewEnforcerClient(srv.URL, "")
-	dec, err := client.Check(context.Background(), "tool", "sess-1", nil)
+	dec, err := client.Check(context.Background(), thoth.CheckRequest{ToolName: "tool", SessionID: "sess-1"})
 
 	if err == nil {
 		t.Fatal("expected error on non-200 response")
@@ -106,7 +110,7 @@ func TestEnforcerClient_RespectsContextCancellation(t *testing.T) {
 	defer cancel()
 
 	client := thoth.NewEnforcerClient(srv.URL, "")
-	dec, err := client.Check(ctx, "tool", "sess-1", nil)
+	dec, err := client.Check(ctx, thoth.CheckRequest{ToolName: "tool", SessionID: "sess-1"})
 
 	if err == nil {
 		t.Fatal("expected context deadline error")
