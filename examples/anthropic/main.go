@@ -5,6 +5,7 @@
 //
 //	ANTHROPIC_API_KEY=sk-ant-...        \
 //	THOTH_API_KEY=your-api-key          \
+//	THOTH_API_URL=https://enforce.acme-corp.aten.security \
 //	THOTH_TENANT_ID=acme-corp           \
 //	THOTH_AGENT_ID=support-bot-v2       \
 //	go run ./sdk/thoth/examples/anthropic/
@@ -33,6 +34,7 @@ func run() error {
 
 	client, err := sdk.NewClient(sdk.Config{
 		APIKey:   envOr("THOTH_API_KEY", ""),
+		APIURL:   envOr("THOTH_API_URL", ""),
 		TenantID: envOr("THOTH_TENANT_ID", "demo-tenant"),
 		AgentID:  envOr("THOTH_AGENT_ID", "support-bot-v2"),
 		Timeout:  5 * time.Second,

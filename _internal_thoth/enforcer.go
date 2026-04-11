@@ -25,6 +25,7 @@ type enforcerRequest struct {
 	SessionToolCalls []string        `json:"session_tool_calls"`
 	EnforcementMode  EnforcementMode `json:"enforcement_mode"`
 	OccurredAt       time.Time       `json:"occurred_at"`
+	SessionIntent    string          `json:"session_intent,omitempty"`
 }
 
 // EnforcerClient calls the Thoth enforcement service to obtain a pre-execution decision.
@@ -63,6 +64,7 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 		SessionToolCalls: check.SessionToolCalls,
 		EnforcementMode:  check.EnforcementMode,
 		OccurredAt:       time.Now().UTC(),
+		SessionIntent:    check.SessionIntent,
 	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {

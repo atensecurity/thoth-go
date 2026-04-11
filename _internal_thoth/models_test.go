@@ -121,3 +121,16 @@ func TestThothConfigDefaults(t *testing.T) {
 		t.Errorf("Enforcement = %q, want Progressive", cfg.Enforcement)
 	}
 }
+
+func TestThothConfigDefaults_UsesAPIURLAsEnforcerURL(t *testing.T) {
+	t.Parallel()
+	cfg := thoth.Config{
+		AgentID:  "test-agent",
+		TenantID: "test-tenant",
+		APIURL:   "https://enforce.test.aten.security",
+	}
+	cfg = thoth.ApplyConfigDefaults(cfg)
+	if cfg.EnforcerURL != cfg.APIURL {
+		t.Errorf("EnforcerURL = %q, want %q", cfg.EnforcerURL, cfg.APIURL)
+	}
+}

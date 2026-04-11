@@ -3,13 +3,9 @@
 // Run with a real API key:
 //
 //	THOTH_API_KEY=your-api-key             \
+//	THOTH_API_URL=https://enforce.acme-corp.aten.security \
 //	THOTH_TENANT_ID=acme-corp              \
 //	THOTH_AGENT_ID=invoice-agent-v1        \
-//	go run ./sdk/thoth/examples/basic/
-//
-// Without environment variables the example uses empty defaults, so you can
-// run it out of the box (enforcer calls will fail-open with ALLOW):
-//
 //	go run ./sdk/thoth/examples/basic/
 package main
 
@@ -36,6 +32,7 @@ func run() error {
 
 	client, err := sdk.NewClient(sdk.Config{
 		APIKey:   envOr("THOTH_API_KEY", ""),
+		APIURL:   envOr("THOTH_API_URL", ""),
 		TenantID: envOr("THOTH_TENANT_ID", "demo-tenant"),
 		AgentID:  envOr("THOTH_AGENT_ID", "invoice-processor-v1"),
 		Timeout:  5 * time.Second,

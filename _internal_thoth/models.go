@@ -104,6 +104,10 @@ type CheckRequest struct {
 	ApprovedScope    []string
 	EnforcementMode  EnforcementMode
 	SessionToolCalls []string
+	// SessionIntent declares the purpose of the session for HIPAA minimum-necessary
+	// enforcement. When a compliance pack defines session_scopes, tools outside the
+	// declared intent scope are step-up-challenged. Empty string means no intent check.
+	SessionIntent string
 }
 
 // Emitter is the interface for behavioral event emission backends.
@@ -124,21 +128,23 @@ type Config struct {
 	ApprovedScope []string
 	// Enforcement controls the response mode on policy violations.
 	Enforcement EnforcementMode
-	// EnforcerURL is the base URL of the enforcement service. Defaults to "http://enforcer:8080".
+	// EnforcerURL is the base URL of the enforcement service.
+	// Defaults to APIURL when provided, otherwise "http://enforcer:8080".
 	EnforcerURL string
 	// APIKey is the Thoth API key for hosted authentication.
 	APIKey string
-	// APIURL is the base URL of the hosted Thoth API. Defaults to "https://api.aten.security".
+	// APIURL is the unified tenant API base URL used for hosted event emission and,
+	// when EnforcerURL is omitted, enforcement checks.
 	APIURL string
+	// SessionIntent declares the purpose of this session for HIPAA minimum-necessary
+	// enforcement. Passed on every enforce call. Empty string means no intent check.
+	SessionIntent string
 }
 
 // ApplyConfigDefaults fills in zero-value fields with sensible defaults.
 func ApplyConfigDefaults(cfg Config) Config {
-	if cfg.APIURL == "" {
-		cfg.APIURL = "https://api.aten.security"
-	}
 	if cfg.EnforcerURL == "" {
-		if cfg.APIKey != "" {
+		if cfg.APIURL != "" {
 			cfg.EnforcerURL = cfg.APIURL
 		} else {
 			cfg.EnforcerURL = "http://enforcer:8080"

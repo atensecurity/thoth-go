@@ -11,6 +11,7 @@
 //
 //	client, err := thoth.NewClient(thoth.Config{
 //	    APIKey:   os.Getenv("THOTH_API_KEY"),
+//	    APIURL:   os.Getenv("THOTH_API_URL"),
 //	    TenantID: "your-tenant-id",
 //	    AgentID:  "invoice-processor-v2",
 //	})
@@ -30,9 +31,11 @@
 //	THOTH_API_KEY    — API key for hosted Thoth authentication
 //	THOTH_TENANT_ID  — tenant identifier
 //	THOTH_AGENT_ID   — agent identifier
+//	THOTH_API_URL    — unified tenant API base URL override (enforcement + events)
 package thoth
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -58,7 +61,8 @@ type Config struct {
 	AgentID string
 
 	// APIURL overrides the Thoth API base URL.
-	// Default: "https://api.aten.security". Useful for staging or self-hosted.
+	// Required (directly or via THOTH_API_URL). This single URL is used for
+	// both policy enforcement (/v1/enforce) and event ingestion (/v1/events/batch).
 	// Env fallback: THOTH_API_URL.
 	APIURL string
 
@@ -95,6 +99,8 @@ func toInternalConfig(cfg Config) ithoth.Config {
 		TenantID: cfg.TenantID,
 		APIKey:   cfg.APIKey,
 		APIURL:   cfg.APIURL,
+		// Enforce a single URL contract for SDK users.
+		EnforcerURL: cfg.APIURL,
 	}
 	if cfg.Enforcement != "" {
 		internal.Enforcement = ithoth.EnforcementMode(cfg.Enforcement)
@@ -113,6 +119,9 @@ type Client struct {
 // NewClient initializes a Thoth SDK client.
 func NewClient(cfg Config) (*Client, error) {
 	cfg = applyEnvFallbacks(cfg)
+	if cfg.APIURL == "" {
+		return nil, fmt.Errorf("thoth: APIURL is required (set Config.APIURL or THOTH_API_URL)")
+	}
 	internalCfg := toInternalConfig(cfg)
 	emitter := ithoth.NewHTTPEmitter(internalCfg.APIURL, internalCfg.APIKey)
 	sess := ithoth.NewSessionContext(internalCfg)

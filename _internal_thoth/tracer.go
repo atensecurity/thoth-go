@@ -78,26 +78,7 @@ func (t *Tracer) ToolNames() []string {
 
 func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 	return func(ctx context.Context, args ...any) (any, error) {
-		if t.cfg.Enforcement == Observe {
-			dec, err := t.enforcer.Check(ctx, CheckRequest{
-				ToolName:         name,
-				SessionID:        t.session.SessionID,
-				AgentID:          t.cfg.AgentID,
-				TenantID:         t.cfg.TenantID,
-				UserID:           t.cfg.UserID,
-				ApprovedScope:    t.cfg.ApprovedScope,
-				EnforcementMode:  t.cfg.Enforcement,
-				SessionToolCalls: t.session.ToolCallsCopy(),
-			})
-			if err != nil {
-				log.Printf("thoth: observe: enforcer unavailable for %q: %v", name, err)
-			} else {
-				log.Printf("thoth: observe: tool %q decision=%s (session=%s)", name, dec.Decision, t.session.SessionID)
-			}
-			return t.runTool(ctx, name, fn, args)
-		}
-
-		dec, err := t.enforcer.Check(ctx, CheckRequest{
+		checkReq := CheckRequest{
 			ToolName:         name,
 			SessionID:        t.session.SessionID,
 			AgentID:          t.cfg.AgentID,
@@ -106,7 +87,20 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			ApprovedScope:    t.cfg.ApprovedScope,
 			EnforcementMode:  t.cfg.Enforcement,
 			SessionToolCalls: t.session.ToolCallsCopy(),
-		})
+			SessionIntent:    t.cfg.SessionIntent,
+		}
+
+		if t.cfg.Enforcement == Observe {
+			dec, err := t.enforcer.Check(ctx, checkReq)
+			if err != nil {
+				log.Printf("thoth: observe: enforcer unavailable for %q: %v", name, err)
+			} else {
+				log.Printf("thoth: observe: tool %q decision=%s (session=%s)", name, dec.Decision, t.session.SessionID)
+			}
+			return t.runTool(ctx, name, fn, args)
+		}
+
+		dec, err := t.enforcer.Check(ctx, checkReq)
 		if err != nil {
 			log.Printf("thoth: warn: enforcer check failed for %q: %v", name, err)
 			dec = allowDecision

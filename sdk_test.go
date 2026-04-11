@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,7 +58,7 @@ func TestNewClientFromEnv(t *testing.T) {
 	t.Setenv("THOTH_API_KEY", "env-api-key")
 	t.Setenv("THOTH_TENANT_ID", "env-tenant")
 	t.Setenv("THOTH_AGENT_ID", "env-agent")
-	t.Setenv("THOTH_API_URL", "https://api.aten.security")
+	t.Setenv("THOTH_API_URL", "https://enforce.env.aten.security")
 
 	client, err := sdk.NewClient(sdk.Config{})
 	if err != nil {
@@ -66,7 +67,7 @@ func TestNewClientFromEnv(t *testing.T) {
 	client.Close()
 }
 
-// TestNewClientFromEnv_EmptyEnv verifies NewClient succeeds with no config and no env vars.
+// TestNewClientFromEnv_EmptyEnv verifies NewClient fails when APIURL is missing.
 func TestNewClientFromEnv_EmptyEnv(t *testing.T) {
 	// Unset all Thoth env vars to ensure a clean state.
 	for _, key := range []string{
@@ -77,10 +78,13 @@ func TestNewClientFromEnv_EmptyEnv(t *testing.T) {
 	}
 
 	client, err := sdk.NewClient(sdk.Config{})
-	if err != nil {
-		t.Fatalf("NewClient with empty config: %v", err)
+	if err == nil {
+		client.Close()
+		t.Fatal("NewClient with empty config: expected error, got nil")
 	}
-	client.Close()
+	if !strings.Contains(err.Error(), "APIURL is required") {
+		t.Fatalf("NewClient with empty config: unexpected error: %v", err)
+	}
 }
 
 // TestWrapToolAllow verifies that when the enforcer returns ALLOW, the wrapped
@@ -245,6 +249,51 @@ func TestWrapToolEnforcerDown(t *testing.T) {
 	}
 	if result != "ok:ping" {
 		t.Errorf("WrapTool(enforcer down): got %q, want %q", result, "ok:ping")
+	}
+}
+
+// TestWrapToolUsesUnifiedAPIURL verifies that enforcement calls are sent to APIURL.
+func TestWrapToolUsesUnifiedAPIURL(t *testing.T) {
+	var enforceHits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/enforce" {
+			atomic.AddInt32(&enforceHits, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "ALLOW"})
+	}))
+	defer srv.Close()
+
+	client, err := sdk.NewClient(sdk.Config{
+		APIURL:   srv.URL,
+		APIKey:   "test-key",
+		TenantID: "test-tenant",
+		AgentID:  "test-agent",
+		Timeout:  300 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	called := false
+	tool := client.WrapTool("read:data", func(_ context.Context, input string) (string, error) {
+		called = true
+		return "ok:" + input, nil
+	})
+
+	result, err := tool(context.Background(), "ping")
+	if err != nil {
+		t.Fatalf("WrapTool(unified api url): unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("WrapTool(unified api url): tool did not execute")
+	}
+	if result != "ok:ping" {
+		t.Fatalf("WrapTool(unified api url): got %q, want %q", result, "ok:ping")
+	}
+	if atomic.LoadInt32(&enforceHits) == 0 {
+		t.Fatal("WrapTool(unified api url): expected /v1/enforce to be called on APIURL")
 	}
 }
 
