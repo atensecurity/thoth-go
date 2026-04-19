@@ -104,3 +104,67 @@ func TestStepUpClient_PollsUntilApproved(t *testing.T) {
 		t.Errorf("expected at least 3 poll calls, got %d", callCount)
 	}
 }
+
+func TestStepUpClient_ParsesHoldTokenResolutionAllow(t *testing.T) {
+	t.Parallel()
+	callCount := 0
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		callCount++
+		count := callCount
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if count == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"token":      "hold-token-allow",
+				"resolved":   false,
+				"resolution": nil,
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token":      "hold-token-allow",
+			"resolved":   true,
+			"resolution": "ALLOW",
+		})
+	}))
+	defer srv.Close()
+
+	client := thoth.NewStepUpClient(srv.URL, "", 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	dec := client.Wait(ctx, "hold-token-allow")
+	if dec.Decision != thoth.DecisionAllow {
+		t.Fatalf("Decision = %q, want ALLOW", dec.Decision)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if callCount < 2 {
+		t.Fatalf("expected at least 2 poll calls, got %d", callCount)
+	}
+}
+
+func TestStepUpClient_ParsesHoldTokenResolutionBlock(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token":      "hold-token-block",
+			"resolved":   true,
+			"resolution": "BLOCK",
+		})
+	}))
+	defer srv.Close()
+
+	client := thoth.NewStepUpClient(srv.URL, "", 10*time.Millisecond)
+	dec := client.Wait(context.Background(), "hold-token-block")
+	if dec.Decision != thoth.DecisionBlock {
+		t.Fatalf("Decision = %q, want BLOCK", dec.Decision)
+	}
+}

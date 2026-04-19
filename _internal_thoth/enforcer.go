@@ -23,7 +23,10 @@ type enforcerRequest struct {
 	UserID           string          `json:"user_id"`
 	ApprovedScope    []string        `json:"approved_scope"`
 	SessionToolCalls []string        `json:"session_tool_calls"`
+	ToolArgs         map[string]any  `json:"tool_args,omitempty"`
 	EnforcementMode  EnforcementMode `json:"enforcement_mode"`
+	Environment      string          `json:"environment"`
+	TraceID          string          `json:"enforcement_trace_id,omitempty"`
 	OccurredAt       time.Time       `json:"occurred_at"`
 	SessionIntent    string          `json:"session_intent,omitempty"`
 }
@@ -49,10 +52,22 @@ func (c *EnforcerClient) Timeout() time.Duration {
 	return c.http.Timeout
 }
 
-var allowDecision = EnforcementDecision{Decision: DecisionAllow}
+var fallbackDecision = EnforcementDecision{
+	Decision: DecisionBlock,
+	Reason:   "enforcer unavailable",
+}
 
 // Check sends a CheckRequest to the enforcer and returns its decision.
 func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (EnforcementDecision, error) {
+	approvedScope := check.ApprovedScope
+	if approvedScope == nil {
+		approvedScope = []string{}
+	}
+	sessionToolCalls := check.SessionToolCalls
+	if sessionToolCalls == nil {
+		sessionToolCalls = []string{}
+	}
+
 	reqBody := enforcerRequest{
 		RequestID:        uuid.New().String(),
 		AgentID:          check.AgentID,
@@ -60,20 +75,23 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 		ToolName:         check.ToolName,
 		SessionID:        check.SessionID,
 		UserID:           check.UserID,
-		ApprovedScope:    check.ApprovedScope,
-		SessionToolCalls: check.SessionToolCalls,
+		ApprovedScope:    approvedScope,
+		SessionToolCalls: sessionToolCalls,
+		ToolArgs:         check.ToolArgs,
 		EnforcementMode:  check.EnforcementMode,
+		Environment:      check.Environment,
+		TraceID:          check.EnforcementTraceID,
 		OccurredAt:       time.Now().UTC(),
 		SessionIntent:    check.SessionIntent,
 	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
-		return allowDecision, fmt.Errorf("thoth: enforcer marshal: %w", err)
+		return fallbackDecision, fmt.Errorf("thoth: enforcer marshal: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/enforce", bytes.NewReader(buf))
 	if err != nil {
-		return allowDecision, fmt.Errorf("thoth: enforcer request build: %w", err)
+		return fallbackDecision, fmt.Errorf("thoth: enforcer request build: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -82,22 +100,22 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		log.Printf("thoth: warn: enforcer unreachable, defaulting to ALLOW: %v", err)
-		return allowDecision, fmt.Errorf("thoth: enforcer request: %w", err)
+		log.Printf("thoth: warn: enforcer unreachable, defaulting to BLOCK: %v", err)
+		return fallbackDecision, fmt.Errorf("thoth: enforcer request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		err = fmt.Errorf("thoth: enforcer returned HTTP %d", resp.StatusCode)
-		log.Printf("thoth: warn: %v, defaulting to ALLOW", err)
-		return allowDecision, err
+		log.Printf("thoth: warn: %v, defaulting to BLOCK", err)
+		return fallbackDecision, err
 	}
 
 	var dec EnforcementDecision
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&dec); decodeErr != nil {
 		err = fmt.Errorf("thoth: enforcer decode: %w", decodeErr)
-		log.Printf("thoth: warn: %v, defaulting to ALLOW", err)
-		return allowDecision, err
+		log.Printf("thoth: warn: %v, defaulting to BLOCK", err)
+		return fallbackDecision, err
 	}
 	return dec, nil
 }

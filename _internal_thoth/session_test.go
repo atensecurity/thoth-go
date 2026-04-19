@@ -1,6 +1,7 @@
 package thoth_test
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -131,5 +132,26 @@ func TestNewSessionContext_GeneratesUniqueIDs(t *testing.T) {
 	s2 := thoth.NewSessionContext(cfg)
 	if s1.SessionID == s2.SessionID {
 		t.Error("SessionIDs should be unique")
+	}
+}
+
+func TestSessionContext_RecordToolCall_BoundedTo128(t *testing.T) {
+	t.Parallel()
+	cfg := thoth.Config{AgentID: "a", TenantID: "t"}
+	s := thoth.NewSessionContext(cfg)
+
+	for i := 0; i < 140; i++ {
+		s.RecordToolCall(fmt.Sprintf("tool-%03d", i))
+	}
+
+	calls := s.ToolCallsCopy()
+	if got := len(calls); got != 128 {
+		t.Fatalf("tool call count = %d, want 128", got)
+	}
+	if calls[0] != "tool-012" {
+		t.Fatalf("first call = %q, want %q", calls[0], "tool-012")
+	}
+	if calls[len(calls)-1] != "tool-139" {
+		t.Fatalf("last call = %q, want %q", calls[len(calls)-1], "tool-139")
 	}
 }

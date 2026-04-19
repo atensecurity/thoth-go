@@ -104,6 +104,14 @@ type CheckRequest struct {
 	ApprovedScope    []string
 	EnforcementMode  EnforcementMode
 	SessionToolCalls []string
+	// ToolArgs is the normalized tool payload sent to the enforcer for
+	// policy evaluation.
+	ToolArgs map[string]any
+	// Environment scopes policy lookup (for example, dev vs prod).
+	Environment string
+	// EnforcementTraceID correlates a tool call through enforcement and
+	// downstream policy engines.
+	EnforcementTraceID string
 	// SessionIntent declares the purpose of the session for HIPAA minimum-necessary
 	// enforcement. When a compliance pack defines session_scopes, tools outside the
 	// declared intent scope are step-up-challenged. Empty string means no intent check.
@@ -136,6 +144,12 @@ type Config struct {
 	// APIURL is the unified tenant API base URL used for hosted event emission and,
 	// when EnforcerURL is omitted, enforcement checks.
 	APIURL string
+	// Environment scopes policy lookup (for example, dev vs prod).
+	// Defaults to "prod".
+	Environment string
+	// EnforcementTraceID correlates requests through enforcement and downstream
+	// policy engines. Defaults to the session ID when empty.
+	EnforcementTraceID string
 	// SessionIntent declares the purpose of this session for HIPAA minimum-necessary
 	// enforcement. Passed on every enforce call. Empty string means no intent check.
 	SessionIntent string
@@ -152,6 +166,12 @@ func ApplyConfigDefaults(cfg Config) Config {
 	}
 	if cfg.Enforcement == "" {
 		cfg.Enforcement = Progressive
+	}
+	if cfg.Environment == "" {
+		cfg.Environment = "prod"
+	}
+	if cfg.ApprovedScope == nil {
+		cfg.ApprovedScope = []string{}
 	}
 	return cfg
 }

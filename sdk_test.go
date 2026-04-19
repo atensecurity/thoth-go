@@ -23,6 +23,17 @@ type enforcerResponse struct {
 	HoldToken   string `json:"hold_token,omitempty"`
 }
 
+type capturedEnforceRequest struct {
+	ToolName           string         `json:"tool_name"`
+	SessionID          string         `json:"session_id"`
+	UserID             string         `json:"user_id"`
+	ApprovedScope      []string       `json:"approved_scope"`
+	SessionIntent      string         `json:"session_intent"`
+	ToolArgs           map[string]any `json:"tool_args"`
+	Environment        string         `json:"environment"`
+	EnforcementTraceID string         `json:"enforcement_trace_id"`
+}
+
 // mockEnforcer returns an httptest.Server that always responds with resp.
 func mockEnforcer(t *testing.T, resp enforcerResponse) *httptest.Server {
 	t.Helper()
@@ -218,8 +229,8 @@ func TestWrapToolStepUp(t *testing.T) {
 	}
 }
 
-// TestWrapToolEnforcerDown verifies fail-open behavior: when the enforcer is
-// unreachable the tool executes normally and no error is returned to the caller.
+// TestWrapToolEnforcerDown verifies fail-closed behavior: when the enforcer is
+// unreachable the tool does not execute and a policy violation is returned.
 func TestWrapToolEnforcerDown(t *testing.T) {
 	// Point at a URL with nothing listening.
 	client, err := sdk.NewClient(sdk.Config{
@@ -240,15 +251,19 @@ func TestWrapToolEnforcerDown(t *testing.T) {
 		return "ok:" + input, nil
 	})
 
-	result, err := resilient(context.Background(), "ping")
-	if err != nil {
-		t.Fatalf("WrapTool(enforcer down): expected nil error (fail-open), got: %v", err)
+	_, err = resilient(context.Background(), "ping")
+	if err == nil {
+		t.Fatal("WrapTool(enforcer down): expected error, got nil")
 	}
-	if !called {
-		t.Error("WrapTool(enforcer down): tool was not called (expected fail-open)")
+	var pve *sdk.PolicyViolationError
+	if !errors.As(err, &pve) {
+		t.Fatalf("WrapTool(enforcer down): expected *PolicyViolationError, got %T: %v", err, err)
 	}
-	if result != "ok:ping" {
-		t.Errorf("WrapTool(enforcer down): got %q, want %q", result, "ok:ping")
+	if pve.Reason != "enforcer unavailable" {
+		t.Errorf("WrapTool(enforcer down): reason = %q, want %q", pve.Reason, "enforcer unavailable")
+	}
+	if called {
+		t.Error("WrapTool(enforcer down): tool must not execute in fail-closed mode")
 	}
 }
 
@@ -316,6 +331,189 @@ func TestWrapToolFunc(t *testing.T) {
 	}
 	if result != 12.0 {
 		t.Errorf("WrapToolFunc: got %v, want 12.0", result)
+	}
+}
+
+func TestWrapToolFunc_SendsToolArgsToEnforcer(t *testing.T) {
+	var got capturedEnforceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/enforce" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "ALLOW"})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+
+	called := false
+	multiply := client.WrapToolFunc("multiply", func(_ context.Context, args map[string]any) (any, error) {
+		called = true
+		a, _ := args["a"].(float64)
+		b, _ := args["b"].(float64)
+		return a * b, nil
+	})
+
+	result, err := multiply(context.Background(), map[string]any{"a": 3.0, "b": 4.0})
+	if err != nil {
+		t.Fatalf("WrapToolFunc_SendsToolArgsToEnforcer: unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("WrapToolFunc_SendsToolArgsToEnforcer: wrapped tool was not called")
+	}
+	if result != 12.0 {
+		t.Fatalf("WrapToolFunc_SendsToolArgsToEnforcer: got %v, want 12.0", result)
+	}
+	if got.ToolName != "multiply" {
+		t.Fatalf("tool_name = %q, want %q", got.ToolName, "multiply")
+	}
+	if got.ToolArgs["a"] != float64(3.0) {
+		t.Fatalf("tool_args.a = %v, want %v", got.ToolArgs["a"], float64(3.0))
+	}
+	if got.ToolArgs["b"] != float64(4.0) {
+		t.Fatalf("tool_args.b = %v, want %v", got.ToolArgs["b"], float64(4.0))
+	}
+}
+
+func TestWrapTool_DefaultsEnvironmentAndTraceID(t *testing.T) {
+	var got capturedEnforceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/enforce" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "ALLOW"})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	tool := client.WrapTool("echo", func(_ context.Context, input string) (string, error) {
+		return input, nil
+	})
+
+	out, err := tool(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("WrapTool(default env/trace): unexpected error: %v", err)
+	}
+	if out != "hello" {
+		t.Fatalf("WrapTool(default env/trace): got %q, want %q", out, "hello")
+	}
+	if got.Environment != "prod" {
+		t.Fatalf("environment = %q, want %q", got.Environment, "prod")
+	}
+	if got.SessionID == "" {
+		t.Fatal("session_id should not be empty")
+	}
+	if got.EnforcementTraceID != got.SessionID {
+		t.Fatalf("enforcement_trace_id = %q, want session_id %q", got.EnforcementTraceID, got.SessionID)
+	}
+}
+
+func TestWrapTool_UsesConfiguredEnvironmentAndTraceID(t *testing.T) {
+	var got capturedEnforceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/enforce" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "ALLOW"})
+	}))
+	defer srv.Close()
+
+	client, err := sdk.NewClient(sdk.Config{
+		APIURL:              srv.URL,
+		APIKey:              "test-key",
+		TenantID:            "test-tenant",
+		AgentID:             "test-agent",
+		Timeout:             2 * time.Second,
+		Environment:         "dev",
+		EnforcementTraceID:  "trace-explicit",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	tool := client.WrapTool("echo", func(_ context.Context, input string) (string, error) {
+		return input, nil
+	})
+
+	out, err := tool(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("WrapTool(explicit env/trace): unexpected error: %v", err)
+	}
+	if out != "hello" {
+		t.Fatalf("WrapTool(explicit env/trace): got %q, want %q", out, "hello")
+	}
+	if got.Environment != "dev" {
+		t.Fatalf("environment = %q, want %q", got.Environment, "dev")
+	}
+	if got.EnforcementTraceID != "trace-explicit" {
+		t.Fatalf("enforcement_trace_id = %q, want %q", got.EnforcementTraceID, "trace-explicit")
+	}
+}
+
+func TestWrapTool_PropagatesUserScopeAndSessionIntent(t *testing.T) {
+	var got capturedEnforceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/enforce" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "ALLOW"})
+	}))
+	defer srv.Close()
+
+	client, err := sdk.NewClient(sdk.Config{
+		APIURL:         srv.URL,
+		APIKey:         "test-key",
+		TenantID:       "test-tenant",
+		AgentID:        "test-agent",
+		UserID:         "user-456",
+		ApprovedScope:  []string{"read_file", "search_docs"},
+		SessionIntent:  "triage",
+		Timeout:        2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	tool := client.WrapTool("read_file", func(_ context.Context, input string) (string, error) {
+		return input, nil
+	})
+	out, err := tool(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("WrapTool(user/scope/intent): unexpected error: %v", err)
+	}
+	if out != "hello" {
+		t.Fatalf("WrapTool(user/scope/intent): got %q, want %q", out, "hello")
+	}
+	if got.UserID != "user-456" {
+		t.Fatalf("user_id = %q, want %q", got.UserID, "user-456")
+	}
+	if len(got.ApprovedScope) != 2 || got.ApprovedScope[0] != "read_file" || got.ApprovedScope[1] != "search_docs" {
+		t.Fatalf("approved_scope = %v, want [read_file search_docs]", got.ApprovedScope)
+	}
+	if got.SessionIntent != "triage" {
+		t.Fatalf("session_intent = %q, want %q", got.SessionIntent, "triage")
 	}
 }
 

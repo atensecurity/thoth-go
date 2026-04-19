@@ -3,9 +3,8 @@
 //
 // Thoth wraps your agent's tool functions with pre-execution policy checks
 // (enforcer) and asynchronous behavioral event emission (HTTP). Enforcement
-// is fail-open: if the enforcer is unreachable, your tool executes normally
-// and a warning is logged — agent availability is never sacrificed for
-// observability.
+// is fail-closed: if the enforcer is unreachable, your tool call is blocked
+// and a policy violation is returned.
 //
 // Quick start:
 //
@@ -32,6 +31,11 @@
 //	THOTH_TENANT_ID  — tenant identifier
 //	THOTH_AGENT_ID   — agent identifier
 //	THOTH_API_URL    — unified tenant API base URL override (enforcement + events)
+//	THOTH_ENV        — environment scope (default: prod)
+//	THOTH_ENFORCEMENT_TRACE_ID — explicit cross-service trace ID override
+//	THOTH_USER_ID    — user identifier for policy evaluation
+//	THOTH_APPROVED_SCOPE — comma-delimited approved tool names
+//	THOTH_SESSION_INTENT — HIPAA minimum-necessary session intent
 package thoth
 
 import (
@@ -39,6 +43,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	ithoth "github.com/atensecurity/thoth-go/_internal_thoth"
@@ -66,6 +71,29 @@ type Config struct {
 	// Env fallback: THOTH_API_URL.
 	APIURL string
 
+	// Environment scopes policy lookup (for example, dev vs prod).
+	// Defaults to "prod".
+	// Env fallback: THOTH_ENV.
+	Environment string
+
+	// UserID identifies the user on whose behalf the agent is acting.
+	// Env fallback: THOTH_USER_ID.
+	UserID string
+
+	// ApprovedScope lists tool names authorized for this agent.
+	// Env fallback: THOTH_APPROVED_SCOPE (comma-delimited).
+	ApprovedScope []string
+
+	// SessionIntent declares the workflow purpose for HIPAA minimum-necessary
+	// enforcement.
+	// Env fallback: THOTH_SESSION_INTENT.
+	SessionIntent string
+
+	// EnforcementTraceID sets an explicit trace correlation ID for enforcement
+	// requests. When empty, session ID is used.
+	// Env fallback: THOTH_ENFORCEMENT_TRACE_ID.
+	EnforcementTraceID string
+
 	// Timeout is the HTTP timeout for enforcer calls. Default: 5s.
 	Timeout time.Duration
 
@@ -87,6 +115,30 @@ func applyEnvFallbacks(cfg Config) Config {
 	if cfg.APIURL == "" {
 		cfg.APIURL = os.Getenv("THOTH_API_URL")
 	}
+	if cfg.Environment == "" {
+		cfg.Environment = os.Getenv("THOTH_ENV")
+	}
+	if cfg.UserID == "" {
+		cfg.UserID = os.Getenv("THOTH_USER_ID")
+	}
+	if len(cfg.ApprovedScope) == 0 {
+		if scope := os.Getenv("THOTH_APPROVED_SCOPE"); scope != "" {
+			parts := strings.Split(scope, ",")
+			cfg.ApprovedScope = make([]string, 0, len(parts))
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					cfg.ApprovedScope = append(cfg.ApprovedScope, p)
+				}
+			}
+		}
+	}
+	if cfg.SessionIntent == "" {
+		cfg.SessionIntent = os.Getenv("THOTH_SESSION_INTENT")
+	}
+	if cfg.EnforcementTraceID == "" {
+		cfg.EnforcementTraceID = os.Getenv("THOTH_ENFORCEMENT_TRACE_ID")
+	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
 	}
@@ -100,7 +152,12 @@ func toInternalConfig(cfg Config) ithoth.Config {
 		APIKey:   cfg.APIKey,
 		APIURL:   cfg.APIURL,
 		// Enforce a single URL contract for SDK users.
-		EnforcerURL: cfg.APIURL,
+		EnforcerURL:        cfg.APIURL,
+		Environment:        cfg.Environment,
+		UserID:             cfg.UserID,
+		ApprovedScope:      cfg.ApprovedScope,
+		SessionIntent:      cfg.SessionIntent,
+		EnforcementTraceID: cfg.EnforcementTraceID,
 	}
 	if cfg.Enforcement != "" {
 		internal.Enforcement = ithoth.EnforcementMode(cfg.Enforcement)

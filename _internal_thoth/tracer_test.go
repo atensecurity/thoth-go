@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +13,11 @@ import (
 )
 
 const toolResultOK = "ok"
+
+type tracedEnforceRequest struct {
+	ToolName         string   `json:"tool_name"`
+	SessionToolCalls []string `json:"session_tool_calls"`
+}
 
 // --- Test helpers ----------------------------------------------------------
 
@@ -151,7 +157,7 @@ func TestWrapTool_RecordsToolCallInSession(t *testing.T) {
 	}
 }
 
-func TestWrapTool_EnforcerOutageFallsBackToAllow(t *testing.T) {
+func TestWrapTool_EnforcerOutageFailsClosed(t *testing.T) {
 	t.Parallel()
 	// Use a closed server to simulate outage.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -170,11 +176,18 @@ func TestWrapTool_EnforcerOutageFallsBackToAllow(t *testing.T) {
 	wrapped := tracer.WrapTool("read_invoices", fn)
 	_, err := wrapped(context.Background())
 
-	if err != nil {
-		t.Fatalf("enforcer outage should fall back to ALLOW, got: %v", err)
+	if err == nil {
+		t.Fatal("expected block on enforcer outage")
 	}
-	if !called {
-		t.Error("function should be called on enforcer outage")
+	var pve *thoth.PolicyViolationError
+	if !errors.As(err, &pve) {
+		t.Fatalf("expected PolicyViolationError, got %T: %v", err, err)
+	}
+	if pve.Reason != "enforcer unavailable" {
+		t.Errorf("Reason = %q, want %q", pve.Reason, "enforcer unavailable")
+	}
+	if called {
+		t.Error("function should NOT be called on enforcer outage")
 	}
 }
 
@@ -219,5 +232,78 @@ func TestWrapTool_ProgressiveMode_FirstViolationStepUp_ThenBlock(t *testing.T) {
 	var pve *thoth.PolicyViolationError
 	if !errors.As(err, &pve) {
 		t.Fatalf("expected PolicyViolationError, got %T", err)
+	}
+}
+
+func TestWrapTool_EnforcePayloadIncludesCurrentToolCall(t *testing.T) {
+	t.Parallel()
+	var got tracedEnforceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(thoth.EnforcementDecision{Decision: thoth.DecisionAllow})
+	}))
+	defer srv.Close()
+
+	cfg := makeTracerConfig(srv.URL)
+	sess := thoth.NewSessionContext(cfg)
+	tracer := thoth.NewTracer(cfg, sess, nil)
+
+	fn := func(ctx context.Context, args ...any) (any, error) {
+		return toolResultOK, nil
+	}
+	wrapped := tracer.WrapTool("read_invoices", fn)
+
+	_, err := wrapped(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got.ToolName != "read_invoices" {
+		t.Fatalf("tool_name = %q, want %q", got.ToolName, "read_invoices")
+	}
+	if len(got.SessionToolCalls) != 1 || got.SessionToolCalls[0] != "read_invoices" {
+		t.Fatalf("session_tool_calls = %v, want [read_invoices]", got.SessionToolCalls)
+	}
+}
+
+func TestWrapTool_SessionToolCallsBoundedTo128(t *testing.T) {
+	t.Parallel()
+	var got tracedEnforceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(thoth.EnforcementDecision{Decision: thoth.DecisionAllow})
+	}))
+	defer srv.Close()
+
+	cfg := makeTracerConfig(srv.URL)
+	sess := thoth.NewSessionContext(cfg)
+	tracer := thoth.NewTracer(cfg, sess, nil)
+
+	for i := 0; i < 140; i++ {
+		toolName := fmt.Sprintf("tool_%03d", i)
+		wrapped := tracer.WrapTool(toolName, func(ctx context.Context, args ...any) (any, error) {
+			return toolResultOK, nil
+		})
+		if _, err := wrapped(context.Background()); err != nil {
+			t.Fatalf("call %d unexpected error: %v", i, err)
+		}
+	}
+
+	if len(got.SessionToolCalls) != 128 {
+		t.Fatalf("session_tool_calls length = %d, want 128", len(got.SessionToolCalls))
+	}
+	if got.SessionToolCalls[0] != "tool_012" {
+		t.Fatalf("first session_tool_calls entry = %q, want %q", got.SessionToolCalls[0], "tool_012")
+	}
+	if got.SessionToolCalls[len(got.SessionToolCalls)-1] != "tool_139" {
+		t.Fatalf("last session_tool_calls entry = %q, want %q", got.SessionToolCalls[len(got.SessionToolCalls)-1], "tool_139")
 	}
 }

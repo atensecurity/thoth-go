@@ -86,8 +86,14 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			UserID:           t.cfg.UserID,
 			ApprovedScope:    t.cfg.ApprovedScope,
 			EnforcementMode:  t.cfg.Enforcement,
-			SessionToolCalls: t.session.ToolCallsCopy(),
-			SessionIntent:    t.cfg.SessionIntent,
+			SessionToolCalls: withCurrentToolCall(t.session.ToolCallsCopy(), name),
+			ToolArgs:         normalizeToolArgs(args),
+			Environment:      t.cfg.Environment,
+			EnforcementTraceID: resolveEnforcementTraceID(
+				t.cfg.EnforcementTraceID,
+				t.session.SessionID,
+			),
+			SessionIntent: t.cfg.SessionIntent,
 		}
 
 		if t.cfg.Enforcement == Observe {
@@ -103,7 +109,7 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 		dec, err := t.enforcer.Check(ctx, checkReq)
 		if err != nil {
 			log.Printf("thoth: warn: enforcer check failed for %q: %v", name, err)
-			dec = allowDecision
+			dec = fallbackDecision
 		}
 
 		switch dec.Decision {
@@ -128,6 +134,40 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 
 		return t.runTool(ctx, name, fn, args)
 	}
+}
+
+func normalizeToolArgs(args []any) map[string]any {
+	if len(args) == 0 {
+		return nil
+	}
+	if len(args) == 1 {
+		if m, ok := args[0].(map[string]any); ok {
+			return m
+		}
+	}
+
+	out := make(map[string]any, len(args))
+	for i, arg := range args {
+		out[fmt.Sprintf("arg%d", i)] = arg
+	}
+	return out
+}
+
+func resolveEnforcementTraceID(configTraceID, sessionID string) string {
+	if configTraceID != "" {
+		return configTraceID
+	}
+	return sessionID
+}
+
+func withCurrentToolCall(toolCalls []string, toolName string) []string {
+	out := make([]string, 0, len(toolCalls)+1)
+	out = append(out, toolCalls...)
+	out = append(out, toolName)
+	if len(out) > sessionToolCallsCap {
+		out = append([]string{}, out[len(out)-sessionToolCallsCap:]...)
+	}
+	return out
 }
 
 func (t *Tracer) runTool(ctx context.Context, name string, fn ToolFunc, args []any) (any, error) {

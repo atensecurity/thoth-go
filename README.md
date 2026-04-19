@@ -19,6 +19,14 @@ export THOTH_TENANT_ID="<tenant>"
 export THOTH_AGENT_ID="invoice-processor-v2"
 ```
 
+Optional policy-context variables:
+
+```bash
+export THOTH_USER_ID="user-123"
+export THOTH_APPROVED_SCOPE="read_file,search_docs"
+export THOTH_SESSION_INTENT="triage"
+```
+
 `THOTH_API_URL` is required. The SDK uses this single URL for both:
 
 - `POST /v1/enforce`
@@ -71,6 +79,6 @@ func main() {
 
 ## Notes
 
-- Enforcement is fail-open on transport errors (tool execution continues if the enforcer is unreachable).
+- Enforcement is fail-closed on transport errors (tool execution is blocked if the enforcer is unreachable).
 - Use `Client.StartSession(...)` for per-request session isolation in servers.
 - See `examples/` for end-to-end usage with OpenAI and Anthropic loops.

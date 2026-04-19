@@ -6,6 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const sessionToolCallsCap = 128
+
 // SessionContext tracks per-session state for a Thoth-instrumented agent.
 // All methods are safe for concurrent use.
 type SessionContext struct {
@@ -31,6 +33,9 @@ func (s *SessionContext) RecordToolCall(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.toolCalls = append(s.toolCalls, name)
+	if len(s.toolCalls) > sessionToolCallsCap {
+		s.toolCalls = append([]string{}, s.toolCalls[len(s.toolCalls)-sessionToolCallsCap:]...)
+	}
 }
 
 // RecordTokenSpend adds tokens to the running total for this session.

@@ -16,6 +16,15 @@ var blockTimeout = EnforcementDecision{
 	Reason:   "step-up auth timeout",
 }
 
+// holdStatusResponse models both the canonical HoldToken polling shape and
+// legacy direct decision payloads for backward compatibility.
+type holdStatusResponse struct {
+	Decision   DecisionType `json:"decision,omitempty"`
+	Reason     string       `json:"reason,omitempty"`
+	Resolved   bool         `json:"resolved"`
+	Resolution DecisionType `json:"resolution,omitempty"`
+}
+
 // StepUpClient polls the enforcement service for a step-up authentication decision.
 type StepUpClient struct {
 	baseURL      string
@@ -87,13 +96,38 @@ func (c *StepUpClient) poll(ctx context.Context, holdToken string) (EnforcementD
 		return EnforcementDecision{}, false
 	}
 
-	var dec EnforcementDecision
-	if err = json.NewDecoder(resp.Body).Decode(&dec); err != nil {
+	var hold holdStatusResponse
+	if err = json.NewDecoder(resp.Body).Decode(&hold); err != nil {
 		log.Printf("thoth: warn: step-up poll decode: %v", err)
 		return EnforcementDecision{}, false
 	}
-	if dec.Decision != DecisionStepUp {
-		return dec, true
+
+	// Backward compatibility: support direct decision-shaped payloads.
+	switch hold.Decision {
+	case DecisionAllow, DecisionBlock:
+		return EnforcementDecision{
+			Decision: hold.Decision,
+			Reason:   hold.Reason,
+		}, true
+	case DecisionStepUp, "":
+		// Continue with hold-token parsing below.
+	default:
+		log.Printf("thoth: warn: step-up poll returned unsupported decision %q", hold.Decision)
+		return EnforcementDecision{}, false
 	}
+
+	if hold.Resolved {
+		switch hold.Resolution {
+		case DecisionAllow, DecisionBlock:
+			return EnforcementDecision{
+				Decision: hold.Resolution,
+				Reason:   hold.Reason,
+			}, true
+		default:
+			log.Printf("thoth: warn: step-up poll resolved without valid resolution (got %q)", hold.Resolution)
+			return EnforcementDecision{}, false
+		}
+	}
+
 	return EnforcementDecision{}, false
 }

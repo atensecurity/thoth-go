@@ -24,8 +24,8 @@ type ToolFunc func(ctx context.Context, args map[string]any) (any, error)
 //   - STEP_UP: execution is paused; the enforcer waits for human approval.
 //     On timeout or denial a *PolicyViolationError is returned.
 //
-// Fail-open: if the enforcer is unreachable, the tool executes with a warning
-// log — agent availability is never sacrificed for observability.
+// Fail-closed: if the enforcer is unreachable, the tool call is blocked and
+// a *PolicyViolationError is returned.
 //
 // Example:
 //
