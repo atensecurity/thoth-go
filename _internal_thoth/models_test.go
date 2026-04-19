@@ -127,7 +127,7 @@ func TestThothConfigDefaults_UsesAPIURLAsEnforcerURL(t *testing.T) {
 	cfg := thoth.Config{
 		AgentID:  "test-agent",
 		TenantID: "test-tenant",
-		APIURL:   "https://enforce.test.aten.security",
+		APIURL:   "https://enforce.test.atensecurity.com",
 	}
 	cfg = thoth.ApplyConfigDefaults(cfg)
 	if cfg.EnforcerURL != cfg.APIURL {

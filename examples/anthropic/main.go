@@ -5,7 +5,7 @@
 //
 //	ANTHROPIC_API_KEY=sk-ant-...        \
 //	THOTH_API_KEY=your-api-key          \
-//	THOTH_API_URL=https://enforce.acme-corp.aten.security \
+//	THOTH_API_URL=https://enforce.acme-corp.atensecurity.com \
 //	THOTH_TENANT_ID=acme-corp           \
 //	THOTH_AGENT_ID=support-bot-v2       \
 //	go run ./sdk/thoth/examples/anthropic/

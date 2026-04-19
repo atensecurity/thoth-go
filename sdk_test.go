@@ -58,7 +58,7 @@ func TestNewClientFromEnv(t *testing.T) {
 	t.Setenv("THOTH_API_KEY", "env-api-key")
 	t.Setenv("THOTH_TENANT_ID", "env-tenant")
 	t.Setenv("THOTH_AGENT_ID", "env-agent")
-	t.Setenv("THOTH_API_URL", "https://enforce.env.aten.security")
+	t.Setenv("THOTH_API_URL", "https://enforce.env.atensecurity.com")
 
 	client, err := sdk.NewClient(sdk.Config{})
 	if err != nil {
