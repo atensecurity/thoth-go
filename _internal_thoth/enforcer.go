@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ type enforcerRequest struct {
 	ToolName         string          `json:"tool_name"`
 	SessionID        string          `json:"session_id"`
 	UserID           string          `json:"user_id"`
+	IdentityBinding  map[string]any  `json:"identity_binding,omitempty"`
 	ApprovedScope    []string        `json:"approved_scope"`
 	SessionToolCalls []string        `json:"session_tool_calls"`
 	ToolArgs         map[string]any  `json:"tool_args,omitempty"`
@@ -75,6 +77,7 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 		ToolName:         check.ToolName,
 		SessionID:        check.SessionID,
 		UserID:           check.UserID,
+		IdentityBinding:  check.IdentityBinding,
 		ApprovedScope:    approvedScope,
 		SessionToolCalls: sessionToolCalls,
 		ToolArgs:         check.ToolArgs,
@@ -117,5 +120,44 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 		log.Printf("thoth: warn: %v, defaulting to BLOCK", err)
 		return fallbackDecision, err
 	}
+	normalizeEnforcementDecision(&dec)
 	return dec, nil
+}
+
+func normalizeEnforcementDecision(dec *EnforcementDecision) {
+	if dec == nil {
+		return
+	}
+
+	raw := strings.TrimSpace(string(dec.Decision))
+	if raw == "" {
+		raw = strings.TrimSpace(dec.AuthorizationDecision)
+	}
+
+	switch strings.ToUpper(raw) {
+	case "ALLOW":
+		dec.Decision = DecisionAllow
+	case "BLOCK", "DENY":
+		dec.Decision = DecisionBlock
+	case "STEP_UP", "CHALLENGE", "ESCALATE", "REVIEW":
+		dec.Decision = DecisionStepUp
+	case "MODIFY", "MODIFIED", "TRANSFORM":
+		dec.Decision = DecisionModify
+	case "DEFER", "DEFERRED", "HOLD":
+		dec.Decision = DecisionDefer
+	default:
+		dec.Decision = DecisionBlock
+		if dec.Reason == "" {
+			dec.Reason = "unsupported authorization decision"
+		}
+	}
+
+	if dec.Reason == "" {
+		switch dec.Decision {
+		case DecisionModify:
+			dec.Reason = dec.ModificationReason
+		case DecisionDefer:
+			dec.Reason = dec.DeferReason
+		}
+	}
 }

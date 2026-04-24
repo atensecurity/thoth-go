@@ -104,9 +104,13 @@ func (c *StepUpClient) poll(ctx context.Context, holdToken string) (EnforcementD
 
 	// Backward compatibility: support direct decision-shaped payloads.
 	switch hold.Decision {
-	case DecisionAllow, DecisionBlock:
+	case DecisionAllow, DecisionBlock, DecisionType("DENY"):
+		direct := hold.Decision
+		if direct == DecisionType("DENY") {
+			direct = DecisionBlock
+		}
 		return EnforcementDecision{
-			Decision: hold.Decision,
+			Decision: direct,
 			Reason:   hold.Reason,
 		}, true
 	case DecisionStepUp, "":
@@ -118,9 +122,13 @@ func (c *StepUpClient) poll(ctx context.Context, holdToken string) (EnforcementD
 
 	if hold.Resolved {
 		switch hold.Resolution {
-		case DecisionAllow, DecisionBlock:
+		case DecisionAllow, DecisionBlock, DecisionType("DENY"):
+			resolution := hold.Resolution
+			if resolution == DecisionType("DENY") {
+				resolution = DecisionBlock
+			}
 			return EnforcementDecision{
-				Decision: hold.Resolution,
+				Decision: resolution,
 				Reason:   hold.Reason,
 			}, true
 		default:

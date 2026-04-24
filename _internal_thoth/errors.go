@@ -4,9 +4,11 @@ import "fmt"
 
 // PolicyViolationError is returned when a tool call is blocked by Thoth policy enforcement.
 type PolicyViolationError struct {
-	ToolName    string
-	Reason      string
-	ViolationID string
+	ToolName             string
+	Reason               string
+	ViolationID          string
+	DecisionReasonCode   string
+	ActionClassification string
 }
 
 // Error implements the error interface.

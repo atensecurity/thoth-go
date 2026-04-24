@@ -31,20 +31,21 @@ func TestEnforcementModeConstants(t *testing.T) {
 
 func TestSourceTypeConstants(t *testing.T) {
 	t.Parallel()
-	if string(thoth.SourceAgent) != "agent" {
-		t.Errorf("SourceAgent = %q, want %q", thoth.SourceAgent, "agent")
+	if string(thoth.SourceAgentToolCall) != "agent_tool_call" {
+		t.Errorf("SourceAgentToolCall = %q, want %q", thoth.SourceAgentToolCall, "agent_tool_call")
 	}
-	if string(thoth.SourceHuman) != "human" {
-		t.Errorf("SourceHuman = %q, want %q", thoth.SourceHuman, "human")
+	if string(thoth.SourceAgentLLM) != "agent_llm_invocation" {
+		t.Errorf("SourceAgentLLM = %q, want %q", thoth.SourceAgentLLM, "agent_llm_invocation")
 	}
 }
 
 func TestEventTypeConstants(t *testing.T) {
 	t.Parallel()
 	cases := map[thoth.EventType]string{
-		thoth.EventToolCall:   "tool_call",
-		thoth.EventTokenSpend: "token_spend",
-		thoth.EventScopeCheck: "scope_check",
+		thoth.EventToolCallPre:   "TOOL_CALL_PRE",
+		thoth.EventToolCallPost:  "TOOL_CALL_POST",
+		thoth.EventToolCallBlock: "TOOL_CALL_BLOCK",
+		thoth.EventLLMInvocation: "LLM_INVOCATION",
 	}
 	for k, want := range cases {
 		if string(k) != want {
@@ -59,6 +60,8 @@ func TestDecisionTypeConstants(t *testing.T) {
 		thoth.DecisionAllow:   "ALLOW",
 		thoth.DecisionBlock:   "BLOCK",
 		thoth.DecisionStepUp:  "STEP_UP",
+		thoth.DecisionModify:  "MODIFY",
+		thoth.DecisionDefer:   "DEFER",
 		thoth.DecisionObserve: "observe",
 	}
 	for k, want := range cases {
@@ -70,20 +73,44 @@ func TestDecisionTypeConstants(t *testing.T) {
 
 func TestBehavioralEventTTL(t *testing.T) {
 	t.Parallel()
-	ev := thoth.NewBehavioralEvent("agent-1", "tenant-1", "sess-1", thoth.EventToolCall, "read_file")
-	if ev.TTL.IsZero() {
+	ev := thoth.NewBehavioralEvent(thoth.BehavioralEventInput{
+		AgentID:    "agent-1",
+		TenantID:   "tenant-1",
+		SessionID:  "sess-1",
+		UserID:     "user-1",
+		SourceType: thoth.SourceAgentToolCall,
+		EventType:  thoth.EventToolCallPre,
+		ToolName:   "read_file",
+		Content:    "tool invocation requested",
+	})
+	if ev.TTL == 0 {
 		t.Fatal("TTL must not be zero")
 	}
-	approxExpiry := time.Now().Add(90 * 24 * time.Hour)
-	diff := ev.TTL.Sub(approxExpiry)
-	if diff < -5*time.Second || diff > 5*time.Second {
+	approxExpiry := time.Now().Add(90 * 24 * time.Hour).Unix()
+	diff := ev.TTL - approxExpiry
+	if diff < -5 || diff > 5 {
 		t.Errorf("TTL diff from 90d = %v, expected near zero", diff)
 	}
 }
 
 func TestBehavioralEventFields(t *testing.T) {
 	t.Parallel()
-	ev := thoth.NewBehavioralEvent("agent-1", "tenant-1", "sess-1", thoth.EventToolCall, "write_slack")
+	ev := thoth.NewBehavioralEvent(thoth.BehavioralEventInput{
+		AgentID:         "agent-1",
+		TenantID:        "tenant-1",
+		SessionID:       "sess-1",
+		UserID:          "user-1",
+		SourceType:      thoth.SourceAgentToolCall,
+		EventType:       thoth.EventToolCallPost,
+		ToolName:        "write_slack",
+		Content:         "tool invocation completed",
+		Metadata:        map[string]any{"k": "v"},
+		ApprovedScope:   []string{"write_slack"},
+		EnforcementMode: thoth.Progressive,
+		SessionToolCalls: []string{
+			"write_slack",
+		},
+	})
 	if ev.AgentID != "agent-1" {
 		t.Errorf("AgentID = %q", ev.AgentID)
 	}
@@ -93,7 +120,13 @@ func TestBehavioralEventFields(t *testing.T) {
 	if ev.SessionID != "sess-1" {
 		t.Errorf("SessionID = %q", ev.SessionID)
 	}
-	if ev.EventType != thoth.EventToolCall {
+	if ev.UserID != "user-1" {
+		t.Errorf("UserID = %q", ev.UserID)
+	}
+	if ev.SourceType != thoth.SourceAgentToolCall {
+		t.Errorf("SourceType = %q", ev.SourceType)
+	}
+	if ev.EventType != thoth.EventToolCallPost {
 		t.Errorf("EventType = %q", ev.EventType)
 	}
 	if ev.ToolName != "write_slack" {
@@ -102,8 +135,14 @@ func TestBehavioralEventFields(t *testing.T) {
 	if ev.EventID == "" {
 		t.Error("EventID must be set")
 	}
-	if ev.Timestamp.IsZero() {
-		t.Error("Timestamp must be set")
+	if ev.OccurredAt.IsZero() {
+		t.Error("OccurredAt must be set")
+	}
+	if ev.Content == "" {
+		t.Error("Content must be set")
+	}
+	if ev.Metadata == nil {
+		t.Error("Metadata must be initialized")
 	}
 }
 

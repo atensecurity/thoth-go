@@ -80,5 +80,7 @@ func main() {
 ## Notes
 
 - Enforcement is fail-closed on transport errors (tool execution is blocked if the enforcer is unreachable).
+- `PolicyViolationError` includes `DecisionReasonCode` and `ActionClassification` for deterministic policy analytics.
+- `StepUpRequiredError` is returned when a pending step-up approval is surfaced with a hold token; step-up timeout/deny outcomes remain `PolicyViolationError` blocks.
 - Use `Client.StartSession(...)` for per-request session isolation in servers.
 - See `examples/` for end-to-end usage with OpenAI and Anthropic loops.

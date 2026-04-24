@@ -41,13 +41,18 @@ func (c *Client) StartSession(ctx context.Context, agentID, sessionID string) (*
 	}
 
 	if c.emitter != nil {
-		ev := ithoth.NewBehavioralEvent(
-			internalCfg.AgentID,
-			internalCfg.TenantID,
-			sessCtx.SessionID,
-			ithoth.EventScopeCheck,
-			"session_start",
-		)
+		ev := ithoth.NewBehavioralEvent(ithoth.BehavioralEventInput{
+			AgentID:         internalCfg.AgentID,
+			TenantID:        internalCfg.TenantID,
+			SessionID:       sessCtx.SessionID,
+			UserID:          internalCfg.UserID,
+			SourceType:      ithoth.SourceAgentToolCall,
+			EventType:       ithoth.EventToolCallPost,
+			ToolName:        "session_start",
+			Content:         "session started",
+			EnforcementMode: internalCfg.Enforcement,
+			ApprovedScope:   append([]string{}, internalCfg.ApprovedScope...),
+		})
 		c.emitter.Emit(&ev)
 	}
 
@@ -109,13 +114,18 @@ func (s *Session) Close() {
 
 	internalCfg := toInternalConfig(s.client.cfg)
 	if s.emitter != nil {
-		ev := ithoth.NewBehavioralEvent(
-			internalCfg.AgentID,
-			internalCfg.TenantID,
-			s.ID,
-			ithoth.EventScopeCheck,
-			"session_end",
-		)
+		ev := ithoth.NewBehavioralEvent(ithoth.BehavioralEventInput{
+			AgentID:         internalCfg.AgentID,
+			TenantID:        internalCfg.TenantID,
+			SessionID:       s.ID,
+			UserID:          internalCfg.UserID,
+			SourceType:      ithoth.SourceAgentToolCall,
+			EventType:       ithoth.EventToolCallPost,
+			ToolName:        "session_end",
+			Content:         "session ended",
+			EnforcementMode: internalCfg.Enforcement,
+			ApprovedScope:   append([]string{}, internalCfg.ApprovedScope...),
+		})
 		s.emitter.Emit(&ev)
 	}
 

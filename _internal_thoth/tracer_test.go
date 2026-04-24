@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/atensecurity/thoth-go/_internal_thoth"
@@ -17,6 +18,27 @@ const toolResultOK = "ok"
 type tracedEnforceRequest struct {
 	ToolName         string   `json:"tool_name"`
 	SessionToolCalls []string `json:"session_tool_calls"`
+}
+
+type captureEmitter struct {
+	mu     sync.Mutex
+	events []thoth.BehavioralEvent
+}
+
+func (c *captureEmitter) Emit(event *thoth.BehavioralEvent) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, *event)
+}
+
+func (c *captureEmitter) Close() {}
+
+func (c *captureEmitter) snapshot() []thoth.BehavioralEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]thoth.BehavioralEvent, len(c.events))
+	copy(out, c.events)
+	return out
 }
 
 // --- Test helpers ----------------------------------------------------------
@@ -305,5 +327,190 @@ func TestWrapTool_SessionToolCallsBoundedTo128(t *testing.T) {
 	}
 	if got.SessionToolCalls[len(got.SessionToolCalls)-1] != "tool_139" {
 		t.Fatalf("last session_tool_calls entry = %q, want %q", got.SessionToolCalls[len(got.SessionToolCalls)-1], "tool_139")
+	}
+}
+
+func TestWrapTool_EmitsCanonicalLifecycleEvents_AllowPath(t *testing.T) {
+	t.Parallel()
+	srv := makeDecisionServer(t, thoth.DecisionAllow)
+	defer srv.Close()
+
+	cfg := makeTracerConfig(srv.URL)
+	cfg.UserID = "user_1"
+	sess := thoth.NewSessionContext(cfg)
+	emitter := &captureEmitter{}
+	tracer := thoth.NewTracer(cfg, sess, emitter)
+
+	wrapped := tracer.WrapTool("read_invoices", func(ctx context.Context, args ...any) (any, error) {
+		return "ok", nil
+	})
+	if _, err := wrapped(context.Background(), map[string]any{"invoice_id": "inv_1"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events := emitter.snapshot()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	if events[0].EventType != thoth.EventToolCallPre {
+		t.Fatalf("first event type = %s, want %s", events[0].EventType, thoth.EventToolCallPre)
+	}
+	if events[1].EventType != thoth.EventToolCallPost {
+		t.Fatalf("second event type = %s, want %s", events[1].EventType, thoth.EventToolCallPost)
+	}
+	for _, event := range events {
+		if event.EventID == "" || event.TenantID == "" || event.SessionID == "" || event.Content == "" {
+			t.Fatalf("event missing required canonical fields: %+v", event)
+		}
+		if event.SourceType != thoth.SourceAgentToolCall {
+			t.Fatalf("unexpected source_type=%s", event.SourceType)
+		}
+		if event.UserID != "user_1" {
+			t.Fatalf("unexpected user_id=%q", event.UserID)
+		}
+		if event.ToolName != "read_invoices" {
+			t.Fatalf("unexpected tool_name=%q", event.ToolName)
+		}
+		if len(event.SessionToolCalls) != 1 || event.SessionToolCalls[0] != "read_invoices" {
+			t.Fatalf("unexpected session_tool_calls=%v", event.SessionToolCalls)
+		}
+		if event.TTL <= event.OccurredAt.Unix() {
+			t.Fatalf("ttl (%d) should be greater than occurred_at (%d)", event.TTL, event.OccurredAt.Unix())
+		}
+	}
+}
+
+func TestWrapTool_EmitsPreThenBlock_OnBlockDecision(t *testing.T) {
+	t.Parallel()
+	srv := makeDecisionServer(t, thoth.DecisionBlock)
+	defer srv.Close()
+
+	cfg := makeTracerConfig(srv.URL)
+	cfg.UserID = "user_1"
+	sess := thoth.NewSessionContext(cfg)
+	emitter := &captureEmitter{}
+	tracer := thoth.NewTracer(cfg, sess, emitter)
+
+	wrapped := tracer.WrapTool("delete_db", func(ctx context.Context, args ...any) (any, error) {
+		return nil, nil
+	})
+	if _, err := wrapped(context.Background()); err == nil {
+		t.Fatal("expected policy violation error")
+	}
+
+	events := emitter.snapshot()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	if events[0].EventType != thoth.EventToolCallPre || events[1].EventType != thoth.EventToolCallBlock {
+		t.Fatalf("unexpected lifecycle order: %s -> %s", events[0].EventType, events[1].EventType)
+	}
+}
+
+func TestWrapTool_EmitsPreThenBlock_OnDeferDecision(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(thoth.EnforcementDecision{
+			Decision:            thoth.DecisionDefer,
+			DeferReason:         "pending reviewer",
+			DeferTimeoutSeconds: 15,
+		})
+	}))
+	defer srv.Close()
+
+	cfg := makeTracerConfig(srv.URL)
+	cfg.UserID = "user_1"
+	sess := thoth.NewSessionContext(cfg)
+	emitter := &captureEmitter{}
+	tracer := thoth.NewTracer(cfg, sess, emitter)
+
+	wrapped := tracer.WrapTool("wire_money", func(ctx context.Context, args ...any) (any, error) {
+		return nil, nil
+	})
+	if _, err := wrapped(context.Background()); err == nil {
+		t.Fatal("expected deferred policy violation")
+	}
+
+	events := emitter.snapshot()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	if events[0].EventType != thoth.EventToolCallPre || events[1].EventType != thoth.EventToolCallBlock {
+		t.Fatalf("unexpected lifecycle order: %s -> %s", events[0].EventType, events[1].EventType)
+	}
+	if events[1].Content == "" {
+		t.Fatal("block event content must be non-empty")
+	}
+}
+
+func TestWrapTool_EmitsPreThenBlock_OnStepUpTimeout(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/enforce":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(thoth.EnforcementDecision{
+				Decision:  thoth.DecisionStepUp,
+				HoldToken: "tok-timeout",
+			})
+		case r.URL.Path == "/v1/enforce/hold/tok-timeout":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := makeTracerConfig(srv.URL)
+	cfg.UserID = "user_1"
+	sess := thoth.NewSessionContext(cfg)
+	emitter := &captureEmitter{}
+	tracer := thoth.NewTracerWithStepUpTimeout(cfg, sess, emitter, 10)
+
+	wrapped := tracer.WrapTool("approve_wire", func(ctx context.Context, args ...any) (any, error) {
+		return "ok", nil
+	})
+	if _, err := wrapped(context.Background()); err == nil {
+		t.Fatal("expected step-up timeout policy violation")
+	}
+
+	events := emitter.snapshot()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	if events[0].EventType != thoth.EventToolCallPre || events[1].EventType != thoth.EventToolCallBlock {
+		t.Fatalf("unexpected lifecycle order: %s -> %s", events[0].EventType, events[1].EventType)
+	}
+}
+
+func TestWrapTool_ExecutionError_EmitsPreWithoutPostOrBlock(t *testing.T) {
+	t.Parallel()
+	srv := makeDecisionServer(t, thoth.DecisionAllow)
+	defer srv.Close()
+
+	cfg := makeTracerConfig(srv.URL)
+	cfg.UserID = "user_1"
+	sess := thoth.NewSessionContext(cfg)
+	emitter := &captureEmitter{}
+	tracer := thoth.NewTracer(cfg, sess, emitter)
+
+	expectedErr := errors.New("tool failed")
+	wrapped := tracer.WrapTool("read_invoices", func(ctx context.Context, args ...any) (any, error) {
+		return nil, expectedErr
+	})
+	_, err := wrapped(context.Background(), map[string]any{"invoice_id": "inv_1"})
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected wrapped error %v, got %v", expectedErr, err)
+	}
+
+	events := emitter.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("expected only PRE event, got %d events", len(events))
+	}
+	if events[0].EventType != thoth.EventToolCallPre {
+		t.Fatalf("unexpected event type %s, want %s", events[0].EventType, thoth.EventToolCallPre)
 	}
 }

@@ -3,6 +3,7 @@
 package thoth
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,17 +27,18 @@ const (
 type SourceType string
 
 const (
-	SourceAgent SourceType = "agent"
-	SourceHuman SourceType = "human"
+	SourceAgentToolCall SourceType = "agent_tool_call"
+	SourceAgentLLM      SourceType = "agent_llm_invocation"
 )
 
 // EventType classifies behavioral events.
 type EventType string
 
 const (
-	EventToolCall   EventType = "tool_call"
-	EventTokenSpend EventType = "token_spend"
-	EventScopeCheck EventType = "scope_check"
+	EventToolCallPre   EventType = "TOOL_CALL_PRE"
+	EventToolCallPost  EventType = "TOOL_CALL_POST"
+	EventToolCallBlock EventType = "TOOL_CALL_BLOCK"
+	EventLLMInvocation EventType = "LLM_INVOCATION"
 )
 
 // DecisionType is the outcome returned by the enforcer.
@@ -46,61 +48,139 @@ const (
 	DecisionAllow   DecisionType = "ALLOW"
 	DecisionBlock   DecisionType = "BLOCK"
 	DecisionStepUp  DecisionType = "STEP_UP"
+	DecisionModify  DecisionType = "MODIFY"
+	DecisionDefer   DecisionType = "DEFER"
 	DecisionObserve DecisionType = "observe"
 )
 
 // ttlDays is the default TTL for behavioral events (90 days).
 const ttlDays = 90
 
+// BehavioralEventInput is the canonical SDK payload for behavioral telemetry.
+// It matches the enforcer/eventingestor contract and avoids legacy-only fields.
+type BehavioralEventInput struct {
+	AgentID          string
+	TenantID         string
+	SessionID        string
+	UserID           string
+	SourceType       SourceType
+	EventType        EventType
+	ToolName         string
+	Content          string
+	Metadata         map[string]any
+	ApprovedScope    []string
+	EnforcementMode  EnforcementMode
+	SessionToolCalls []string
+	OccurredAt       time.Time
+	ViolationID      string
+}
+
 // BehavioralEvent represents a single observable action by the agent.
 type BehavioralEvent struct {
-	EventID   string            `json:"event_id"`
-	AgentID   string            `json:"agent_id"`
-	TenantID  string            `json:"tenant_id"`
-	SessionID string            `json:"session_id"`
-	EventType EventType         `json:"event_type"`
-	ToolName  string            `json:"tool_name,omitempty"`
-	Source    SourceType        `json:"source"`
-	Tokens    int64             `json:"tokens,omitempty"`
-	Timestamp time.Time         `json:"timestamp"`
-	TTL       time.Time         `json:"ttl"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
+	EventID          string          `json:"event_id"`
+	TenantID         string          `json:"tenant_id"`
+	AgentID          string          `json:"agent_id,omitempty"`
+	SessionID        string          `json:"session_id"`
+	UserID           string          `json:"user_id"`
+	SourceType       SourceType      `json:"source_type"`
+	EventType        EventType       `json:"event_type"`
+	ToolName         string          `json:"tool_name,omitempty"`
+	Content          string          `json:"content"`
+	Metadata         map[string]any  `json:"metadata"`
+	ApprovedScope    []string        `json:"approved_scope"`
+	EnforcementMode  EnforcementMode `json:"enforcement_mode"`
+	SessionToolCalls []string        `json:"session_tool_calls"`
+	OccurredAt       time.Time       `json:"occurred_at"`
+	TTL              int64           `json:"ttl"`
+	ViolationID      string          `json:"violation_id,omitempty"`
 }
 
 // NewBehavioralEvent constructs a BehavioralEvent with a generated ID, current timestamp,
 // and a TTL set to 90 days from now.
-func NewBehavioralEvent(agentID, tenantID, sessionID string, eventType EventType, toolName string) BehavioralEvent {
-	now := time.Now().UTC()
+func NewBehavioralEvent(input BehavioralEventInput) BehavioralEvent {
+	occurredAt := input.OccurredAt.UTC()
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	if input.SourceType == "" {
+		input.SourceType = SourceAgentToolCall
+	}
+	if input.Metadata == nil {
+		input.Metadata = map[string]any{}
+	}
+	if input.ApprovedScope == nil {
+		input.ApprovedScope = []string{}
+	}
+	if input.SessionToolCalls == nil {
+		input.SessionToolCalls = []string{}
+	}
 	return BehavioralEvent{
-		EventID:   uuid.New().String(),
-		AgentID:   agentID,
-		TenantID:  tenantID,
-		SessionID: sessionID,
-		EventType: eventType,
-		ToolName:  toolName,
-		Source:    SourceAgent,
-		Timestamp: now,
-		TTL:       now.Add(ttlDays * 24 * time.Hour),
+		EventID:          uuid.New().String(),
+		TenantID:         input.TenantID,
+		AgentID:          input.AgentID,
+		SessionID:        input.SessionID,
+		UserID:           input.UserID,
+		SourceType:       input.SourceType,
+		EventType:        input.EventType,
+		ToolName:         input.ToolName,
+		Content:          ensureContent(input.Content, input.EventType, input.ToolName),
+		Metadata:         input.Metadata,
+		ApprovedScope:    input.ApprovedScope,
+		EnforcementMode:  input.EnforcementMode,
+		SessionToolCalls: input.SessionToolCalls,
+		OccurredAt:       occurredAt,
+		TTL:              occurredAt.Add(ttlDays * 24 * time.Hour).Unix(),
+		ViolationID:      input.ViolationID,
+	}
+}
+
+func ensureContent(content string, eventType EventType, toolName string) string {
+	if strings.TrimSpace(content) != "" {
+		return content
+	}
+	switch eventType {
+	case EventToolCallPre:
+		return "tool invocation requested"
+	case EventToolCallPost:
+		return "tool invocation completed"
+	case EventToolCallBlock:
+		return "tool invocation blocked"
+	case EventLLMInvocation:
+		return "llm invocation telemetry"
+	default:
+		return "behavioral event"
 	}
 }
 
 // EnforcementDecision is the response from the enforcer service.
 type EnforcementDecision struct {
-	Decision    DecisionType `json:"decision"`
-	Reason      string       `json:"reason,omitempty"`
-	ViolationID string       `json:"violation_id,omitempty"`
-	HoldToken   string       `json:"hold_token,omitempty"`
-	RiskScore   float64      `json:"risk_score,omitempty"`
-	LatencyMs   float64      `json:"latency_ms,omitempty"`
+	Decision              DecisionType   `json:"decision"`
+	AuthorizationDecision string         `json:"authorization_decision,omitempty"`
+	DecisionReasonCode    string         `json:"decision_reason_code,omitempty"`
+	ActionClassification  string         `json:"action_classification,omitempty"`
+	Reason                string         `json:"reason,omitempty"`
+	ViolationID           string         `json:"violation_id,omitempty"`
+	HoldToken             string         `json:"hold_token,omitempty"`
+	RiskScore             float64        `json:"risk_score,omitempty"`
+	LatencyMs             float64        `json:"latency_ms,omitempty"`
+	Receipt               map[string]any `json:"receipt,omitempty"`
+	ModifiedToolArgs      map[string]any `json:"modified_tool_args,omitempty"`
+	ModificationReason    string         `json:"modification_reason,omitempty"`
+	DeferReason           string         `json:"defer_reason,omitempty"`
+	DeferTimeoutSeconds   int            `json:"defer_timeout_seconds,omitempty"`
+	StepUpTimeoutSeconds  int            `json:"step_up_timeout_seconds,omitempty"`
 }
 
 // CheckRequest contains all fields needed by the enforcer to produce a policy decision.
 type CheckRequest struct {
-	ToolName         string
-	SessionID        string
-	AgentID          string
-	TenantID         string
-	UserID           string
+	ToolName  string
+	SessionID string
+	AgentID   string
+	TenantID  string
+	UserID    string
+	// IdentityBinding carries actor/tenant/user identity attributes used
+	// for pre-execution binding checks.
+	IdentityBinding  map[string]any
 	ApprovedScope    []string
 	EnforcementMode  EnforcementMode
 	SessionToolCalls []string
@@ -132,6 +212,9 @@ type Config struct {
 	TenantID string
 	// UserID identifies the user on whose behalf the agent is acting.
 	UserID string
+	// IdentityBinding carries actor/tenant/user identity attributes used
+	// for pre-execution binding checks.
+	IdentityBinding map[string]any
 	// ApprovedScope lists the tool names this agent is authorized to call.
 	ApprovedScope []string
 	// Enforcement controls the response mode on policy violations.

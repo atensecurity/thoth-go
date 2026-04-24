@@ -15,6 +15,7 @@ type captureEnforceRequest struct {
 	ToolName         string         `json:"tool_name"`
 	SessionID        string         `json:"session_id"`
 	UserID           string         `json:"user_id"`
+	IdentityBinding  map[string]any `json:"identity_binding"`
 	ApprovedScope    []string       `json:"approved_scope"`
 	SessionToolCalls []string       `json:"session_tool_calls"`
 	ToolArgs         map[string]any `json:"tool_args"`
@@ -72,6 +73,44 @@ func TestEnforcerClient_CheckReturnsBlock(t *testing.T) {
 	}
 	if dec.Reason != "out of scope" {
 		t.Errorf("Reason = %q", dec.Reason)
+	}
+}
+
+func TestEnforcerClient_DecodesDecisionMetadataFields(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"authorization_decision": "BLOCK",
+			"decision_reason_code":   "policy_scope_violation",
+			"action_classification":  "write",
+			"reason":                 "write is out of scope",
+			"receipt": map[string]any{
+				"signature": "sig-123",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := thoth.NewEnforcerClient(srv.URL, "")
+	dec, err := client.Check(context.Background(), thoth.CheckRequest{
+		ToolName: "write_file", SessionID: "sess-meta",
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Decision != thoth.DecisionBlock {
+		t.Fatalf("Decision = %q, want %q", dec.Decision, thoth.DecisionBlock)
+	}
+	if dec.DecisionReasonCode != "policy_scope_violation" {
+		t.Fatalf("decision_reason_code = %q, want %q", dec.DecisionReasonCode, "policy_scope_violation")
+	}
+	if dec.ActionClassification != "write" {
+		t.Fatalf("action_classification = %q, want %q", dec.ActionClassification, "write")
+	}
+	if dec.Receipt["signature"] != "sig-123" {
+		t.Fatalf("receipt.signature = %v, want %q", dec.Receipt["signature"], "sig-123")
 	}
 }
 
@@ -204,12 +243,12 @@ func TestEnforcerClient_IncludesEnvironmentAndTraceID(t *testing.T) {
 
 	client := thoth.NewEnforcerClient(srv.URL, "")
 	_, err := client.Check(context.Background(), thoth.CheckRequest{
-		ToolName:            "read_file",
-		SessionID:           "sess-env",
-		Environment:         "dev",
-		EnforcementTraceID:  "trace-123",
-		SessionToolCalls:    []string{"list_files"},
-		EnforcementMode:     thoth.Block,
+		ToolName:           "read_file",
+		SessionID:          "sess-env",
+		Environment:        "dev",
+		EnforcementTraceID: "trace-123",
+		SessionToolCalls:   []string{"list_files"},
+		EnforcementMode:    thoth.Block,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -260,5 +299,44 @@ func TestEnforcerClient_PropagatesUserScopeAndSessionIntent(t *testing.T) {
 	}
 	if got.SessionIntent != "investigation" {
 		t.Fatalf("session_intent = %q, want %q", got.SessionIntent, "investigation")
+	}
+}
+
+func TestEnforcerClient_PropagatesIdentityBinding(t *testing.T) {
+	t.Parallel()
+	var got captureEnforceRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(thoth.EnforcementDecision{Decision: thoth.DecisionAllow})
+	}))
+	defer srv.Close()
+
+	client := thoth.NewEnforcerClient(srv.URL, "")
+	_, err := client.Check(context.Background(), thoth.CheckRequest{
+		ToolName:  "read_file",
+		SessionID: "sess-ident",
+		IdentityBinding: map[string]any{
+			"agent_id":  "agent-7",
+			"tenant_id": "tenant-9",
+			"user_id":   "user-11",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got.IdentityBinding["agent_id"] != "agent-7" {
+		t.Fatalf("identity_binding.agent_id = %v, want %q", got.IdentityBinding["agent_id"], "agent-7")
+	}
+	if got.IdentityBinding["tenant_id"] != "tenant-9" {
+		t.Fatalf("identity_binding.tenant_id = %v, want %q", got.IdentityBinding["tenant_id"], "tenant-9")
+	}
+	if got.IdentityBinding["user_id"] != "user-11" {
+		t.Fatalf("identity_binding.user_id = %v, want %q", got.IdentityBinding["user_id"], "user-11")
 	}
 }

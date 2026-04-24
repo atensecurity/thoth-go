@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
+	"strings"
 
 	ithoth "github.com/atensecurity/thoth-go/_internal_thoth"
 )
@@ -23,6 +25,8 @@ type ToolFunc func(ctx context.Context, args map[string]any) (any, error)
 //   - BLOCK:   execution is prevented; a *PolicyViolationError is returned.
 //   - STEP_UP: execution is paused; the enforcer waits for human approval.
 //     On timeout or denial a *PolicyViolationError is returned.
+//   - MODIFY:  execution proceeds with policy-modified tool arguments.
+//   - DEFER:   execution is deferred; a *PolicyViolationError is returned.
 //
 // Fail-closed: if the enforcer is unreachable, the tool call is blocked and
 // a *PolicyViolationError is returned.
@@ -100,20 +104,70 @@ func translateError(err error) error {
 	// Internal PolicyViolationError → public PolicyViolationError.
 	var pve *ithoth.PolicyViolationError
 	if errors.As(err, &pve) {
+		if sue, ok := translateStepUpPendingError(pve); ok {
+			return sue
+		}
 		return &PolicyViolationError{
-			ToolName:    pve.ToolName,
-			Reason:      pve.Reason,
-			ViolationID: pve.ViolationID,
+			ToolName:             pve.ToolName,
+			Reason:               pve.Reason,
+			ViolationID:          pve.ViolationID,
+			DecisionReasonCode:   pve.DecisionReasonCode,
+			ActionClassification: pve.ActionClassification,
 		}
 	}
 
-	// The internal tracer surfaces step-up timeouts as PolicyViolationError with
-	// "step-up auth required" prefix. For the public SDK we surface any step-up
-	// scenario that did NOT time out as a StepUpRequiredError so callers can
-	// distinguish "blocked" from "pending approval".
-	// The internal package encodes this in the PolicyViolationError.Reason field
-	// when it wraps an original STEP_UP decision — we forward as-is here since
-	// wait/timeout have already been handled inside the tracer.
 	log.Printf("thoth: sdk: unhandled internal error type %T: %v", err, err)
 	return err
+}
+
+var holdTokenPatterns = [...]*regexp.Regexp{
+	regexp.MustCompile(`(?i)hold[_\s-]?token[=:]\s*([A-Za-z0-9._:-]+)`),
+	regexp.MustCompile(`(?i)hold[_\s-]?token\s+([A-Za-z0-9._:-]+)`),
+	regexp.MustCompile(`(?i)"hold_token"\s*:\s*"([^"]+)"`),
+}
+
+func translateStepUpPendingError(pve *ithoth.PolicyViolationError) (*StepUpRequiredError, bool) {
+	reason := strings.TrimSpace(pve.Reason)
+	if reason == "" {
+		return nil, false
+	}
+
+	normalized := strings.ToLower(reason)
+	if !strings.Contains(normalized, "step-up") && !strings.Contains(normalized, "step up") {
+		return nil, false
+	}
+
+	// Timeout/deny represent terminal block outcomes and must remain
+	// PolicyViolationError for caller handling and audit parity.
+	if strings.Contains(normalized, "timeout") ||
+		strings.Contains(normalized, "timed out") ||
+		strings.Contains(normalized, "denied") ||
+		strings.Contains(normalized, "rejected") {
+		return nil, false
+	}
+
+	holdToken := extractHoldToken(reason)
+	if holdToken == "" {
+		return nil, false
+	}
+
+	return &StepUpRequiredError{
+		ToolName:  pve.ToolName,
+		HoldToken: holdToken,
+		Reason:    reason,
+	}, true
+}
+
+func extractHoldToken(reason string) string {
+	for _, pattern := range holdTokenPatterns {
+		match := pattern.FindStringSubmatch(reason)
+		if len(match) > 1 {
+			token := strings.TrimSpace(match[1])
+			token = strings.Trim(token, `"'()[]{}.,;`)
+			if token != "" {
+				return token
+			}
+		}
+	}
+	return ""
 }

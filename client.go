@@ -80,6 +80,10 @@ type Config struct {
 	// Env fallback: THOTH_USER_ID.
 	UserID string
 
+	// IdentityBinding carries actor/tenant/user identity attributes used
+	// for pre-execution binding checks.
+	IdentityBinding map[string]any
+
 	// ApprovedScope lists tool names authorized for this agent.
 	// Env fallback: THOTH_APPROVED_SCOPE (comma-delimited).
 	ApprovedScope []string
@@ -155,6 +159,7 @@ func toInternalConfig(cfg Config) ithoth.Config {
 		EnforcerURL:        cfg.APIURL,
 		Environment:        cfg.Environment,
 		UserID:             cfg.UserID,
+		IdentityBinding:    cfg.IdentityBinding,
 		ApprovedScope:      cfg.ApprovedScope,
 		SessionIntent:      cfg.SessionIntent,
 		EnforcementTraceID: cfg.EnforcementTraceID,

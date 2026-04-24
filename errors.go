@@ -13,6 +13,10 @@ type PolicyViolationError struct {
 	// ViolationID is the enforcer-assigned identifier for this violation event.
 	// Use it to look up the full audit record in the Thoth dashboard.
 	ViolationID string
+	// DecisionReasonCode is the stable policy reason code emitted by enforcer.
+	DecisionReasonCode string
+	// ActionClassification is the policy action class (read/write/execute/etc.).
+	ActionClassification string
 }
 
 // Error implements the error interface.

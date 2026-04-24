@@ -32,7 +32,21 @@ func (m *mockBatchSender) callCount() int {
 }
 
 func newTestEvent() *thoth.BehavioralEvent {
-	ev := thoth.NewBehavioralEvent("agent-1", "tenant-1", "session-1", thoth.EventToolCall, "tool")
+	ev := thoth.NewBehavioralEvent(thoth.BehavioralEventInput{
+		AgentID:         "agent-1",
+		TenantID:        "tenant-1",
+		SessionID:       "session-1",
+		UserID:          "user-1",
+		SourceType:      thoth.SourceAgentToolCall,
+		EventType:       thoth.EventToolCallPost,
+		ToolName:        "tool",
+		Content:         "tool invocation completed",
+		ApprovedScope:   []string{"tool"},
+		EnforcementMode: thoth.Progressive,
+		SessionToolCalls: []string{
+			"tool",
+		},
+	})
 	return &ev
 }
 

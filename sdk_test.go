@@ -17,16 +17,24 @@ import (
 
 // enforcerResponse mirrors the internal EnforcementDecision shape sent over the wire.
 type enforcerResponse struct {
-	Decision    string `json:"decision"`
-	Reason      string `json:"reason,omitempty"`
-	ViolationID string `json:"violation_id,omitempty"`
-	HoldToken   string `json:"hold_token,omitempty"`
+	Decision              string         `json:"decision,omitempty"`
+	AuthorizationDecision string         `json:"authorization_decision,omitempty"`
+	DecisionReasonCode    string         `json:"decision_reason_code,omitempty"`
+	ActionClassification  string         `json:"action_classification,omitempty"`
+	Reason                string         `json:"reason,omitempty"`
+	ViolationID           string         `json:"violation_id,omitempty"`
+	HoldToken             string         `json:"hold_token,omitempty"`
+	ModifiedToolArgs      map[string]any `json:"modified_tool_args,omitempty"`
+	ModificationReason    string         `json:"modification_reason,omitempty"`
+	DeferReason           string         `json:"defer_reason,omitempty"`
+	DeferTimeoutSeconds   int            `json:"defer_timeout_seconds,omitempty"`
 }
 
 type capturedEnforceRequest struct {
 	ToolName           string         `json:"tool_name"`
 	SessionID          string         `json:"session_id"`
 	UserID             string         `json:"user_id"`
+	IdentityBinding    map[string]any `json:"identity_binding"`
 	ApprovedScope      []string       `json:"approved_scope"`
 	SessionIntent      string         `json:"session_intent"`
 	ToolArgs           map[string]any `json:"tool_args"`
@@ -128,9 +136,11 @@ func TestWrapToolAllow(t *testing.T) {
 // tool is not executed and a *PolicyViolationError is returned.
 func TestWrapToolBlock(t *testing.T) {
 	srv := mockEnforcer(t, enforcerResponse{
-		Decision:    "BLOCK",
-		Reason:      "unauthorized data exfiltration",
-		ViolationID: "v-001",
+		Decision:             "BLOCK",
+		DecisionReasonCode:   "policy_scope_violation",
+		ActionClassification: "write",
+		Reason:               "unauthorized data exfiltration",
+		ViolationID:          "v-001",
 	})
 	defer srv.Close()
 
@@ -159,6 +169,12 @@ func TestWrapToolBlock(t *testing.T) {
 	}
 	if pve.ViolationID != "v-001" {
 		t.Errorf("PolicyViolationError.ViolationID: got %q, want %q", pve.ViolationID, "v-001")
+	}
+	if pve.DecisionReasonCode != "policy_scope_violation" {
+		t.Errorf("PolicyViolationError.DecisionReasonCode: got %q, want %q", pve.DecisionReasonCode, "policy_scope_violation")
+	}
+	if pve.ActionClassification != "write" {
+		t.Errorf("PolicyViolationError.ActionClassification: got %q, want %q", pve.ActionClassification, "write")
 	}
 	if called {
 		t.Error("WrapTool(block): underlying tool must not be called on BLOCK")
@@ -226,6 +242,152 @@ func TestWrapToolStepUp(t *testing.T) {
 	}
 	if called {
 		t.Error("WrapTool(step_up timeout): underlying tool must not execute on step-up timeout")
+	}
+}
+
+func TestWrapToolStepUpPendingReturnsStepUpRequiredError(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{
+		Decision: "BLOCK",
+		Reason:   "step-up auth required: reviewer approval pending (hold_token=tok-pending-123)",
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+
+	called := false
+	risky := client.WrapTool("wire_transfer", func(_ context.Context, _ string) (string, error) {
+		called = true
+		return "ok", nil
+	})
+
+	_, err := risky(context.Background(), "input")
+	if err == nil {
+		t.Fatal("WrapTool(step_up pending): expected error, got nil")
+	}
+
+	var sue *sdk.StepUpRequiredError
+	if !errors.As(err, &sue) {
+		t.Fatalf("WrapTool(step_up pending): expected *StepUpRequiredError, got %T: %v", err, err)
+	}
+	if sue.ToolName != "wire_transfer" {
+		t.Fatalf("StepUpRequiredError.ToolName: got %q, want %q", sue.ToolName, "wire_transfer")
+	}
+	if sue.HoldToken != "tok-pending-123" {
+		t.Fatalf("StepUpRequiredError.HoldToken: got %q, want %q", sue.HoldToken, "tok-pending-123")
+	}
+	if !strings.Contains(strings.ToLower(sue.Reason), "pending") {
+		t.Fatalf("StepUpRequiredError.Reason: got %q, expected pending reason", sue.Reason)
+	}
+	if called {
+		t.Fatal("WrapTool(step_up pending): underlying tool must not execute")
+	}
+}
+
+func TestWrapToolStepUpDeniedRemainsPolicyViolation(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{
+		Decision: "BLOCK",
+		Reason:   "step-up auth required: step-up denied by reviewer (hold_token=tok-denied-456)",
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	risky := client.WrapTool("wire_transfer", func(_ context.Context, _ string) (string, error) {
+		return "ok", nil
+	})
+
+	_, err := risky(context.Background(), "input")
+	if err == nil {
+		t.Fatal("WrapTool(step_up denied): expected error, got nil")
+	}
+
+	var pve *sdk.PolicyViolationError
+	if !errors.As(err, &pve) {
+		t.Fatalf("WrapTool(step_up denied): expected *PolicyViolationError, got %T: %v", err, err)
+	}
+	var sue *sdk.StepUpRequiredError
+	if errors.As(err, &sue) {
+		t.Fatalf("WrapTool(step_up denied): expected non-step-up terminal block, got *StepUpRequiredError: %+v", sue)
+	}
+}
+
+func TestWrapToolModify_StringInput(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{
+		Decision:         "MODIFY",
+		ModifiedToolArgs: map[string]any{"input": "sanitized"},
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	echo := client.WrapTool("echo", func(_ context.Context, input string) (string, error) {
+		return input, nil
+	})
+
+	out, err := echo(context.Background(), "original")
+	if err != nil {
+		t.Fatalf("WrapTool(modify string): unexpected error: %v", err)
+	}
+	if out != "sanitized" {
+		t.Fatalf("WrapTool(modify string): got %q, want %q", out, "sanitized")
+	}
+}
+
+func TestWrapToolFuncModify_MapArgs(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{
+		AuthorizationDecision: "MODIFY",
+		ModifiedToolArgs: map[string]any{
+			"a": float64(8),
+			"b": float64(2),
+		},
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	divide := client.WrapToolFunc("divide", func(_ context.Context, args map[string]any) (any, error) {
+		a, _ := args["a"].(float64)
+		b, _ := args["b"].(float64)
+		return a / b, nil
+	})
+
+	result, err := divide(context.Background(), map[string]any{"a": 10.0, "b": 5.0})
+	if err != nil {
+		t.Fatalf("WrapToolFunc(modify): unexpected error: %v", err)
+	}
+	if result != 4.0 {
+		t.Fatalf("WrapToolFunc(modify): got %v, want 4.0", result)
+	}
+}
+
+func TestWrapToolDefer(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{
+		Decision:            "DEFER",
+		DeferReason:         "pending human review",
+		DeferTimeoutSeconds: 45,
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	called := false
+	tool := client.WrapTool("wire", func(_ context.Context, input string) (string, error) {
+		called = true
+		return input, nil
+	})
+
+	_, err := tool(context.Background(), "send")
+	if err == nil {
+		t.Fatal("WrapTool(defer): expected error, got nil")
+	}
+	var pve *sdk.PolicyViolationError
+	if !errors.As(err, &pve) {
+		t.Fatalf("WrapTool(defer): expected *PolicyViolationError, got %T: %v", err, err)
+	}
+	if !strings.Contains(pve.Reason, "pending human review") {
+		t.Fatalf("WrapTool(defer): reason = %q, expected defer reason", pve.Reason)
+	}
+	if !strings.Contains(pve.Reason, "45s") {
+		t.Fatalf("WrapTool(defer): reason = %q, expected retry timeout", pve.Reason)
+	}
+	if called {
+		t.Fatal("WrapTool(defer): underlying tool must not execute")
 	}
 }
 
@@ -434,13 +596,13 @@ func TestWrapTool_UsesConfiguredEnvironmentAndTraceID(t *testing.T) {
 	defer srv.Close()
 
 	client, err := sdk.NewClient(sdk.Config{
-		APIURL:              srv.URL,
-		APIKey:              "test-key",
-		TenantID:            "test-tenant",
-		AgentID:             "test-agent",
-		Timeout:             2 * time.Second,
-		Environment:         "dev",
-		EnforcementTraceID:  "trace-explicit",
+		APIURL:             srv.URL,
+		APIKey:             "test-key",
+		TenantID:           "test-tenant",
+		AgentID:            "test-agent",
+		Timeout:            2 * time.Second,
+		Environment:        "dev",
+		EnforcementTraceID: "trace-explicit",
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -482,14 +644,14 @@ func TestWrapTool_PropagatesUserScopeAndSessionIntent(t *testing.T) {
 	defer srv.Close()
 
 	client, err := sdk.NewClient(sdk.Config{
-		APIURL:         srv.URL,
-		APIKey:         "test-key",
-		TenantID:       "test-tenant",
-		AgentID:        "test-agent",
-		UserID:         "user-456",
-		ApprovedScope:  []string{"read_file", "search_docs"},
-		SessionIntent:  "triage",
-		Timeout:        2 * time.Second,
+		APIURL:        srv.URL,
+		APIKey:        "test-key",
+		TenantID:      "test-tenant",
+		AgentID:       "test-agent",
+		UserID:        "user-456",
+		ApprovedScope: []string{"read_file", "search_docs"},
+		SessionIntent: "triage",
+		Timeout:       2 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -514,6 +676,15 @@ func TestWrapTool_PropagatesUserScopeAndSessionIntent(t *testing.T) {
 	}
 	if got.SessionIntent != "triage" {
 		t.Fatalf("session_intent = %q, want %q", got.SessionIntent, "triage")
+	}
+	if got.IdentityBinding["agent_id"] != "test-agent" {
+		t.Fatalf("identity_binding.agent_id = %v, want %q", got.IdentityBinding["agent_id"], "test-agent")
+	}
+	if got.IdentityBinding["tenant_id"] != "test-tenant" {
+		t.Fatalf("identity_binding.tenant_id = %v, want %q", got.IdentityBinding["tenant_id"], "test-tenant")
+	}
+	if got.IdentityBinding["user_id"] != "user-456" {
+		t.Fatalf("identity_binding.user_id = %v, want %q", got.IdentityBinding["user_id"], "user-456")
 	}
 }
 
