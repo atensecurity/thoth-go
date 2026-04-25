@@ -77,6 +77,28 @@ func main() {
 }
 ```
 
+## Framework helper maps
+
+Use map wrappers for OpenAI/Anthropic-style tool loops where tool args are `map[string]any`:
+
+```go
+wrappedAnthropic := client.InstrumentAnthropic(map[string]thoth.ToolFunc{
+  "search_docs": func(ctx context.Context, args map[string]any) (any, error) {
+    return "found: " + args["query"].(string), nil
+  },
+})
+
+// Legacy aliases remain supported:
+wrappedOpenAI := client.WrapOpenAITools(map[string]thoth.ToolFunc{
+  "search_docs": func(ctx context.Context, args map[string]any) (any, error) {
+    return "found: " + args["query"].(string), nil
+  },
+})
+
+_, _ = wrappedAnthropic["search_docs"](context.Background(), map[string]any{"query": "retention policy"})
+_, _ = wrappedOpenAI["search_docs"](context.Background(), map[string]any{"query": "incident response"})
+```
+
 ## Notes
 
 - Enforcement is fail-closed on transport errors (tool execution is blocked if the enforcer is unreachable).

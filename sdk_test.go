@@ -542,6 +542,70 @@ func TestWrapToolFunc_SendsToolArgsToEnforcer(t *testing.T) {
 	}
 }
 
+func TestInstrumentAnthropic_WrapsToolMap(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{Decision: "ALLOW"})
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+
+	called := false
+	wrapped := client.InstrumentAnthropic(map[string]sdk.ToolFunc{
+		"search_docs": func(_ context.Context, args map[string]any) (any, error) {
+			called = true
+			return "ok:" + args["query"].(string), nil
+		},
+	})
+
+	search, ok := wrapped["search_docs"]
+	if !ok {
+		t.Fatal("InstrumentAnthropic: missing wrapped search_docs tool")
+	}
+	result, err := search(context.Background(), map[string]any{"query": "retention policy"})
+	if err != nil {
+		t.Fatalf("InstrumentAnthropic: unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("InstrumentAnthropic: wrapped tool was not called")
+	}
+	if result != "ok:retention policy" {
+		t.Fatalf("InstrumentAnthropic: got %v, want %v", result, "ok:retention policy")
+	}
+}
+
+func TestWrapOpenAITools_legacyAlias_BlocksOnPolicyDecision(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{
+		Decision:    "BLOCK",
+		Reason:      "out of scope",
+		ViolationID: "v-block-openai",
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+
+	wrapped := client.WrapOpenAITools(map[string]sdk.ToolFunc{
+		"delete_record": func(_ context.Context, _ map[string]any) (any, error) {
+			return "should-not-run", nil
+		},
+	})
+
+	deleteRecord, ok := wrapped["delete_record"]
+	if !ok {
+		t.Fatal("WrapOpenAITools: missing wrapped delete_record tool")
+	}
+	_, err := deleteRecord(context.Background(), map[string]any{"id": "123"})
+	if err == nil {
+		t.Fatal("WrapOpenAITools: expected block error, got nil")
+	}
+
+	var pve *sdk.PolicyViolationError
+	if !errors.As(err, &pve) {
+		t.Fatalf("WrapOpenAITools: expected *PolicyViolationError, got %T: %v", err, err)
+	}
+	if pve.ViolationID != "v-block-openai" {
+		t.Fatalf("WrapOpenAITools: violation_id = %q, want %q", pve.ViolationID, "v-block-openai")
+	}
+}
+
 func TestWrapTool_DefaultsEnvironmentAndTraceID(t *testing.T) {
 	var got capturedEnforceRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
