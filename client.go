@@ -32,6 +32,7 @@
 //	THOTH_AGENT_ID   — agent identifier
 //	THOTH_API_URL    — unified tenant API base URL override (enforcement + events)
 //	THOTH_ENV        — environment scope (default: prod)
+//	THOTH_ENVIRONMENT — alternate environment scope key (default: prod)
 //	THOTH_ENFORCEMENT_TRACE_ID — explicit cross-service trace ID override
 //	THOTH_USER_ID    — user identifier for policy evaluation
 //	THOTH_APPROVED_SCOPE — comma-delimited approved tool names
@@ -73,7 +74,7 @@ type Config struct {
 
 	// Environment scopes policy lookup (for example, dev vs prod).
 	// Defaults to "prod".
-	// Env fallback: THOTH_ENV.
+	// Env fallback: THOTH_ENV, then THOTH_ENVIRONMENT.
 	Environment string
 
 	// UserID identifies the user on whose behalf the agent is acting.
@@ -121,6 +122,9 @@ func applyEnvFallbacks(cfg Config) Config {
 	}
 	if cfg.Environment == "" {
 		cfg.Environment = os.Getenv("THOTH_ENV")
+		if cfg.Environment == "" {
+			cfg.Environment = os.Getenv("THOTH_ENVIRONMENT")
+		}
 	}
 	if cfg.UserID == "" {
 		cfg.UserID = os.Getenv("THOTH_USER_ID")
@@ -195,6 +199,25 @@ func NewClient(cfg Config) (*Client, error) {
 		emitter: emitter,
 		http:    &http.Client{Timeout: cfg.Timeout},
 	}
+	traceID := internalCfg.EnforcementTraceID
+	if traceID == "" {
+		traceID = sess.SessionID
+	}
+	startEvent := ithoth.NewBehavioralEvent(ithoth.BehavioralEventInput{
+		AgentID:          internalCfg.AgentID,
+		TenantID:         internalCfg.TenantID,
+		SessionID:        sess.SessionID,
+		UserID:           internalCfg.UserID,
+		SourceType:       ithoth.SourceAgentLLM,
+		EventType:        ithoth.EventLLMInvocation,
+		ToolName:         "go_sdk",
+		Content:          fmt.Sprintf("go_sdk_session_start enforcement=%s", internalCfg.Enforcement),
+		Metadata:         map[string]any{"enforcement_trace_id": traceID, "environment": internalCfg.Environment},
+		ApprovedScope:    append([]string{}, internalCfg.ApprovedScope...),
+		EnforcementMode:  internalCfg.Enforcement,
+		SessionToolCalls: []string{},
+	})
+	emitter.Emit(&startEvent)
 
 	log.Printf("thoth: client initialized (agent=%q tenant=%q enforcement=%s)",
 		cfg.AgentID, cfg.TenantID, internalCfg.Enforcement)

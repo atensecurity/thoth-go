@@ -2,7 +2,11 @@ package thoth_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -149,5 +153,97 @@ func TestEmit_CloseFlushesRemaining(t *testing.T) {
 
 	if mock.callCount() == 0 {
 		t.Error("expected SendMessageBatch to be called after Close()")
+	}
+}
+
+func TestHTTPEmitter_SendsDualAuthHeaders(t *testing.T) {
+	t.Parallel()
+
+	type requestCapture struct {
+		path          string
+		authorization string
+		xAPIKey       string
+		contentType   string
+		body          string
+	}
+
+	var (
+		mu       sync.Mutex
+		captures []requestCapture
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		captures = append(captures, requestCapture{
+			path:          r.URL.Path,
+			authorization: r.Header.Get("Authorization"),
+			xAPIKey:       r.Header.Get("X-Api-Key"),
+			contentType:   r.Header.Get("Content-Type"),
+			body:          string(payload),
+		})
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	e := thoth.NewHTTPEmitter(server.URL, "aten_test_key")
+	e.Emit(newTestEvent())
+	e.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(captures) != 1 {
+		t.Fatalf("expected exactly one ingest request, got %d", len(captures))
+	}
+	req := captures[0]
+	if req.path != "/v1/events/batch" {
+		t.Fatalf("unexpected ingest path: %s", req.path)
+	}
+	if req.authorization != "Bearer aten_test_key" {
+		t.Fatalf("missing/invalid Authorization header: %q", req.authorization)
+	}
+	if req.xAPIKey != "aten_test_key" {
+		t.Fatalf("missing/invalid X-Api-Key header: %q", req.xAPIKey)
+	}
+	if req.contentType != "application/json" {
+		t.Fatalf("unexpected content-type: %q", req.contentType)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(req.body), &decoded); err != nil {
+		t.Fatalf("failed to decode request body: %v", err)
+	}
+	events, ok := decoded["events"].([]any)
+	if !ok || len(events) != 1 {
+		t.Fatalf("expected single event payload, got: %#v", decoded["events"])
+	}
+}
+
+func TestHTTPEmitter_Non2xxStillFlushes(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu       sync.Mutex
+		received int
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		mu.Lock()
+		received++
+		mu.Unlock()
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	e := thoth.NewHTTPEmitter(server.URL, "aten_test_key")
+	e.Emit(newTestEvent())
+	e.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if received != 1 {
+		t.Fatalf("expected one request despite 403 response, got %d", received)
 	}
 }

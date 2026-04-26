@@ -115,7 +115,7 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			if err != nil {
 				log.Printf("thoth: observe: enforcer unavailable for %q: %v", name, err)
 			} else {
-				log.Printf("thoth: observe: tool %q decision=%s (session=%s)", name, dec.Decision, t.session.SessionID)
+				t.logDecision(name, checkReq.EnforcementTraceID, dec, "observe")
 			}
 			return t.runTool(ctx, name, fn, args, sessionToolCalls)
 		}
@@ -125,6 +125,7 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			log.Printf("thoth: warn: enforcer check failed for %q: %v", name, err)
 			dec = fallbackDecision
 		}
+		t.logDecision(name, checkReq.EnforcementTraceID, dec, "enforce")
 		effectiveArgs := args
 
 		switch dec.Decision {
@@ -162,6 +163,7 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			stepCtx, cancel := context.WithTimeout(ctx, t.stepUpTimeout)
 			defer cancel()
 			stepDec := t.stepUp.Wait(stepCtx, dec.HoldToken)
+			t.logDecision(name, checkReq.EnforcementTraceID, stepDec, "step_up_resolved")
 			if stepDec.Decision == DecisionBlock {
 				t.emitBlockEvent(name, stepDec, sessionToolCalls)
 				return nil, &PolicyViolationError{
@@ -176,6 +178,20 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 
 		return t.runTool(ctx, name, fn, effectiveArgs, sessionToolCalls)
 	}
+}
+
+func (t *Tracer) logDecision(toolName, traceID string, decision EnforcementDecision, phase string) {
+	log.Printf(
+		"thoth: %s decision tool=%q decision=%s authorization_decision=%q reason_code=%q reason=%q trace_id=%q session_id=%q",
+		phase,
+		toolName,
+		decision.Decision,
+		decision.AuthorizationDecision,
+		decision.DecisionReasonCode,
+		decision.Reason,
+		traceID,
+		t.session.SessionID,
+	)
 }
 
 func coalesceNonEmpty(primary, fallback string) string {

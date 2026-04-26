@@ -86,6 +86,46 @@ func TestNewClientFromEnv(t *testing.T) {
 	client.Close()
 }
 
+func TestNewClientFromEnv_UsesTHOTHENVIRONMENTFallback(t *testing.T) {
+	var got capturedEnforceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/enforce" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "ALLOW"})
+	}))
+	defer srv.Close()
+
+	t.Setenv("THOTH_API_KEY", "env-api-key")
+	t.Setenv("THOTH_TENANT_ID", "env-tenant")
+	t.Setenv("THOTH_AGENT_ID", "env-agent")
+	t.Setenv("THOTH_API_URL", srv.URL)
+	t.Setenv("THOTH_ENV", "")
+	t.Setenv("THOTH_ENVIRONMENT", "dev")
+
+	client, err := sdk.NewClient(sdk.Config{})
+	if err != nil {
+		t.Fatalf("NewClient from env fallback: %v", err)
+	}
+	defer client.Close()
+
+	tool := client.WrapTool("echo", func(_ context.Context, input string) (string, error) {
+		return input, nil
+	})
+	_, err = tool(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("WrapTool with env fallback: unexpected error: %v", err)
+	}
+	if got.Environment != "dev" {
+		t.Fatalf("environment = %q, want %q", got.Environment, "dev")
+	}
+}
+
 // TestNewClientFromEnv_EmptyEnv verifies NewClient fails when APIURL is missing.
 func TestNewClientFromEnv_EmptyEnv(t *testing.T) {
 	// Unset all Thoth env vars to ensure a clean state.

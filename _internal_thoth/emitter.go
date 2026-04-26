@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -18,6 +19,7 @@ import (
 const (
 	emitterBufSize  = 1000
 	emitterBatchMax = 10
+	maxErrorBodyLen = 512
 )
 
 // sqsSender is the interface used by SQSEmitter (enables test doubles).
@@ -56,7 +58,7 @@ func (e *SQSEmitter) Emit(event *BehavioralEvent) {
 	select {
 	case e.ch <- event:
 	default:
-		slog.Warn("thoth: emitter buffer full, dropping event", "event_id", event.EventID)
+		slog.Error("thoth: emitter buffer full, dropping event", "event_id", event.EventID, "dropped", true)
 	}
 }
 
@@ -103,7 +105,7 @@ func (e *SQSEmitter) sendBatch(ctx context.Context, events []*BehavioralEvent) {
 	for i, ev := range events {
 		body, err := json.Marshal(ev)
 		if err != nil {
-			slog.Warn("thoth: failed to marshal event", "event_id", ev.EventID, "err", err)
+			slog.Error("thoth: failed to marshal event; dropping event", "event_id", ev.EventID, "err", err, "dropped", true)
 			continue
 		}
 		entries = append(entries, types.SendMessageBatchRequestEntry{
@@ -120,7 +122,7 @@ func (e *SQSEmitter) sendBatch(ctx context.Context, events []*BehavioralEvent) {
 		QueueUrl: aws.String(e.queueURL),
 		Entries:  entries,
 	}); err != nil {
-		slog.Warn("thoth: failed to send batch", "count", len(entries), "err", err)
+		slog.Error("thoth: failed to send batch; events dropped", "count", len(entries), "err", err, "dropped", true)
 	}
 }
 
@@ -154,7 +156,7 @@ func (e *HTTPEmitter) Emit(event *BehavioralEvent) {
 	select {
 	case e.ch <- event:
 	default:
-		slog.Warn("thoth: http emitter buffer full, dropping event", "event_id", event.EventID)
+		slog.Error("thoth: http emitter buffer full, dropping event", "event_id", event.EventID, "dropped", true)
 	}
 }
 
@@ -203,28 +205,44 @@ func (e *HTTPEmitter) sendBatch(events []*BehavioralEvent) {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		slog.Warn("thoth: http emitter marshal error", "err", err)
+		slog.Error("thoth: http emitter marshal error; events dropped", "count", len(events), "err", err, "dropped", true)
 		return
 	}
 
 	req, err := http.NewRequest(http.MethodPost, e.endpoint, bytes.NewReader(body))
 	if err != nil {
-		slog.Warn("thoth: http emitter request build error", "err", err)
+		slog.Error("thoth: http emitter request build error; events dropped", "count", len(events), "err", err, "dropped", true)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if e.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+e.apiKey)
+		req.Header.Set("X-Api-Key", e.apiKey)
 	}
 
 	resp, err := e.http.Do(req)
 	if err != nil {
-		slog.Warn("thoth: http emitter send error", "count", len(events), "err", err)
+		slog.Error("thoth: http emitter send error; events dropped", "count", len(events), "err", err, "dropped", true)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		slog.Warn("thoth: http emitter unexpected status", "status", resp.StatusCode, "count", len(events))
+		errBody := ""
+		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyLen))
+		if readErr != nil {
+			errBody = fmt.Sprintf("<read_error:%v>", readErr)
+		} else {
+			errBody = strings.TrimSpace(string(bodyBytes))
+		}
+		slog.Error(
+			"thoth: http emitter unexpected status; events dropped",
+			"status", resp.StatusCode,
+			"status_text", resp.Status,
+			"url", e.endpoint,
+			"response_body", errBody,
+			"count", len(events),
+			"dropped", true,
+		)
 	}
 }

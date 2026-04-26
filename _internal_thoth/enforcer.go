@@ -103,21 +103,21 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		log.Printf("thoth: warn: enforcer unreachable, defaulting to BLOCK: %v", err)
+		log.Printf("thoth: ERROR: enforcer unreachable, fail-closed fallback to BLOCK: %v", err)
 		return fallbackDecision, fmt.Errorf("thoth: enforcer request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		err = fmt.Errorf("thoth: enforcer returned HTTP %d", resp.StatusCode)
-		log.Printf("thoth: warn: %v, defaulting to BLOCK", err)
+		log.Printf("thoth: ERROR: %v, fail-closed fallback to BLOCK", err)
 		return fallbackDecision, err
 	}
 
 	var dec EnforcementDecision
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&dec); decodeErr != nil {
 		err = fmt.Errorf("thoth: enforcer decode: %w", decodeErr)
-		log.Printf("thoth: warn: %v, defaulting to BLOCK", err)
+		log.Printf("thoth: ERROR: %v, fail-closed fallback to BLOCK", err)
 		return fallbackDecision, err
 	}
 	normalizeEnforcementDecision(&dec)
