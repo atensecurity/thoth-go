@@ -181,14 +181,19 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 }
 
 func (t *Tracer) logDecision(toolName, traceID string, decision EnforcementDecision, phase string) {
+	if !shouldLogDecisionDebug() {
+		return
+	}
+
 	log.Printf(
-		"thoth: %s decision tool=%q decision=%s authorization_decision=%q reason_code=%q reason=%q trace_id=%q session_id=%q",
+		"thoth: %s decision tool=%q decision=%s authorization_decision=%q reason_code=%q reason=%q hold_token=%q trace_id=%q session_id=%q",
 		phase,
 		toolName,
 		decision.Decision,
 		decision.AuthorizationDecision,
 		decision.DecisionReasonCode,
 		decision.Reason,
+		decision.HoldToken,
 		traceID,
 		t.session.SessionID,
 	)

@@ -37,6 +37,7 @@
 //	THOTH_USER_ID    — user identifier for policy evaluation
 //	THOTH_APPROVED_SCOPE — comma-delimited approved tool names
 //	THOTH_SESSION_INTENT — HIPAA minimum-necessary session intent
+//	THOTH_LOG_LEVEL — optional SDK decision-log level override (falls back to LOG_LEVEL)
 package thoth
 
 import (

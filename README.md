@@ -25,6 +25,7 @@ Optional policy-context variables:
 export THOTH_USER_ID="user-123"
 export THOTH_APPROVED_SCOPE="read_file,search_docs"
 export THOTH_SESSION_INTENT="triage"
+export THOTH_LOG_LEVEL="DEBUG" # optional; falls back to LOG_LEVEL when unset
 ```
 
 `THOTH_API_URL` is required. The SDK uses this single URL for both:
@@ -104,5 +105,6 @@ _, _ = wrappedOpenAI["search_docs"](context.Background(), map[string]any{"query"
 - Enforcement is fail-closed on transport errors (tool execution is blocked if the enforcer is unreachable).
 - `PolicyViolationError` includes `DecisionReasonCode` and `ActionClassification` for deterministic policy analytics.
 - `StepUpRequiredError` is returned when a pending step-up approval is surfaced with a hold token; step-up timeout/deny outcomes remain `PolicyViolationError` blocks.
+- Decision debug logs include `hold_token` when present (`STEP_UP` flows). Use `THOTH_LOG_LEVEL` (`DEBUG`, `INFO`, `WARN`, `ERROR`) to tune SDK decision-log verbosity; fallback is `LOG_LEVEL`.
 - Use `Client.StartSession(...)` for per-request session isolation in servers.
 - See `examples/` for end-to-end usage with OpenAI and Anthropic loops.
