@@ -9,6 +9,14 @@ import (
 	"github.com/google/uuid"
 )
 
+func tenantScopedEventID(tenantID string) string {
+	tenant := strings.TrimSpace(tenantID)
+	if tenant == "" {
+		tenant = "unknown"
+	}
+	return tenant + ":" + uuid.NewString()
+}
+
 // EnforcementMode controls how Thoth responds to policy violations.
 type EnforcementMode string
 
@@ -115,7 +123,7 @@ func NewBehavioralEvent(input BehavioralEventInput) BehavioralEvent {
 		input.SessionToolCalls = []string{}
 	}
 	return BehavioralEvent{
-		EventID:          uuid.New().String(),
+		EventID:          tenantScopedEventID(input.TenantID),
 		TenantID:         input.TenantID,
 		AgentID:          input.AgentID,
 		SessionID:        input.SessionID,

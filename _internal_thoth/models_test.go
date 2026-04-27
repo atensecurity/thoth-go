@@ -135,6 +135,9 @@ func TestBehavioralEventFields(t *testing.T) {
 	if ev.EventID == "" {
 		t.Error("EventID must be set")
 	}
+	if got, wantPrefix := ev.EventID, "tenant-1:"; len(got) <= len(wantPrefix) || got[:len(wantPrefix)] != wantPrefix {
+		t.Errorf("EventID = %q, want tenant-scoped prefix %q", ev.EventID, wantPrefix)
+	}
 	if ev.OccurredAt.IsZero() {
 		t.Error("OccurredAt must be set")
 	}
