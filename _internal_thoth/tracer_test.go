@@ -14,6 +14,8 @@ import (
 )
 
 const toolResultOK = "ok"
+const testReadInvoicesTool = "read_invoices"
+const testUserID = "user_1"
 
 type tracedEnforceRequest struct {
 	ToolName         string   `json:"tool_name"`
@@ -56,7 +58,7 @@ func makeTracerConfig(enforcerURL string) thoth.Config {
 	return thoth.Config{
 		AgentID:       "test-agent",
 		TenantID:      "test-tenant",
-		ApprovedScope: []string{"read_invoices", "write_slack"},
+		ApprovedScope: []string{testReadInvoicesTool, "write_slack"},
 		Enforcement:   thoth.Block,
 		EnforcerURL:   enforcerURL,
 	}
@@ -79,7 +81,7 @@ func TestWrapTool_AllowedToolCallsThrough(t *testing.T) {
 		return "result", nil
 	}
 
-	wrapped := tracer.WrapTool("read_invoices", fn)
+	wrapped := tracer.WrapTool(testReadInvoicesTool, fn)
 	result, err := wrapped(context.Background())
 
 	if err != nil {
@@ -170,12 +172,12 @@ func TestWrapTool_RecordsToolCallInSession(t *testing.T) {
 	fn := func(ctx context.Context, args ...any) (any, error) {
 		return nil, nil
 	}
-	wrapped := tracer.WrapTool("read_invoices", fn)
+	wrapped := tracer.WrapTool(testReadInvoicesTool, fn)
 	_, _ = wrapped(context.Background())
 
 	calls := sess.ToolCallsCopy()
-	if len(calls) != 1 || calls[0] != "read_invoices" {
-		t.Errorf("session tool calls = %v, want [read_invoices]", calls)
+	if len(calls) != 1 || calls[0] != testReadInvoicesTool {
+		t.Errorf("session tool calls = %v, want [%s]", calls, testReadInvoicesTool)
 	}
 }
 
@@ -195,7 +197,7 @@ func TestWrapTool_EnforcerOutageFailsClosed(t *testing.T) {
 		called = true
 		return toolResultOK, nil
 	}
-	wrapped := tracer.WrapTool("read_invoices", fn)
+	wrapped := tracer.WrapTool(testReadInvoicesTool, fn)
 	_, err := wrapped(context.Background())
 
 	if err == nil {
@@ -277,18 +279,18 @@ func TestWrapTool_EnforcePayloadIncludesCurrentToolCall(t *testing.T) {
 	fn := func(ctx context.Context, args ...any) (any, error) {
 		return toolResultOK, nil
 	}
-	wrapped := tracer.WrapTool("read_invoices", fn)
+	wrapped := tracer.WrapTool(testReadInvoicesTool, fn)
 
 	_, err := wrapped(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got.ToolName != "read_invoices" {
-		t.Fatalf("tool_name = %q, want %q", got.ToolName, "read_invoices")
+	if got.ToolName != testReadInvoicesTool {
+		t.Fatalf("tool_name = %q, want %q", got.ToolName, testReadInvoicesTool)
 	}
-	if len(got.SessionToolCalls) != 1 || got.SessionToolCalls[0] != "read_invoices" {
-		t.Fatalf("session_tool_calls = %v, want [read_invoices]", got.SessionToolCalls)
+	if len(got.SessionToolCalls) != 1 || got.SessionToolCalls[0] != testReadInvoicesTool {
+		t.Fatalf("session_tool_calls = %v, want [%s]", got.SessionToolCalls, testReadInvoicesTool)
 	}
 }
 
@@ -336,12 +338,12 @@ func TestWrapTool_EmitsCanonicalLifecycleEvents_AllowPath(t *testing.T) {
 	defer srv.Close()
 
 	cfg := makeTracerConfig(srv.URL)
-	cfg.UserID = "user_1"
+	cfg.UserID = testUserID
 	sess := thoth.NewSessionContext(cfg)
 	emitter := &captureEmitter{}
 	tracer := thoth.NewTracer(cfg, sess, emitter)
 
-	wrapped := tracer.WrapTool("read_invoices", func(ctx context.Context, args ...any) (any, error) {
+	wrapped := tracer.WrapTool(testReadInvoicesTool, func(ctx context.Context, args ...any) (any, error) {
 		return "ok", nil
 	})
 	if _, err := wrapped(context.Background(), map[string]any{"invoice_id": "inv_1"}); err != nil {
@@ -365,13 +367,13 @@ func TestWrapTool_EmitsCanonicalLifecycleEvents_AllowPath(t *testing.T) {
 		if event.SourceType != thoth.SourceAgentToolCall {
 			t.Fatalf("unexpected source_type=%s", event.SourceType)
 		}
-		if event.UserID != "user_1" {
+		if event.UserID != testUserID {
 			t.Fatalf("unexpected user_id=%q", event.UserID)
 		}
-		if event.ToolName != "read_invoices" {
+		if event.ToolName != testReadInvoicesTool {
 			t.Fatalf("unexpected tool_name=%q", event.ToolName)
 		}
-		if len(event.SessionToolCalls) != 1 || event.SessionToolCalls[0] != "read_invoices" {
+		if len(event.SessionToolCalls) != 1 || event.SessionToolCalls[0] != testReadInvoicesTool {
 			t.Fatalf("unexpected session_tool_calls=%v", event.SessionToolCalls)
 		}
 		if event.TTL <= event.OccurredAt.Unix() {
@@ -386,7 +388,7 @@ func TestWrapTool_EmitsPreThenBlock_OnBlockDecision(t *testing.T) {
 	defer srv.Close()
 
 	cfg := makeTracerConfig(srv.URL)
-	cfg.UserID = "user_1"
+	cfg.UserID = testUserID
 	sess := thoth.NewSessionContext(cfg)
 	emitter := &captureEmitter{}
 	tracer := thoth.NewTracer(cfg, sess, emitter)
@@ -421,7 +423,7 @@ func TestWrapTool_EmitsPreThenBlock_OnDeferDecision(t *testing.T) {
 	defer srv.Close()
 
 	cfg := makeTracerConfig(srv.URL)
-	cfg.UserID = "user_1"
+	cfg.UserID = testUserID
 	sess := thoth.NewSessionContext(cfg)
 	emitter := &captureEmitter{}
 	tracer := thoth.NewTracer(cfg, sess, emitter)
@@ -448,15 +450,15 @@ func TestWrapTool_EmitsPreThenBlock_OnDeferDecision(t *testing.T) {
 func TestWrapTool_EmitsPreThenBlock_OnStepUpTimeout(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1/enforce":
+		switch r.URL.Path {
+		case "/v1/enforce":
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(thoth.EnforcementDecision{
 				Decision:  thoth.DecisionStepUp,
 				HoldToken: "tok-timeout",
 			})
-		case r.URL.Path == "/v1/enforce/hold/tok-timeout":
+		case "/v1/enforce/hold/tok-timeout":
 			w.WriteHeader(http.StatusAccepted)
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -465,7 +467,7 @@ func TestWrapTool_EmitsPreThenBlock_OnStepUpTimeout(t *testing.T) {
 	defer srv.Close()
 
 	cfg := makeTracerConfig(srv.URL)
-	cfg.UserID = "user_1"
+	cfg.UserID = testUserID
 	sess := thoth.NewSessionContext(cfg)
 	emitter := &captureEmitter{}
 	tracer := thoth.NewTracerWithStepUpTimeout(cfg, sess, emitter, 10)
@@ -492,13 +494,13 @@ func TestWrapTool_ExecutionError_EmitsPreWithoutPostOrBlock(t *testing.T) {
 	defer srv.Close()
 
 	cfg := makeTracerConfig(srv.URL)
-	cfg.UserID = "user_1"
+	cfg.UserID = testUserID
 	sess := thoth.NewSessionContext(cfg)
 	emitter := &captureEmitter{}
 	tracer := thoth.NewTracer(cfg, sess, emitter)
 
 	expectedErr := errors.New("tool failed")
-	wrapped := tracer.WrapTool("read_invoices", func(ctx context.Context, args ...any) (any, error) {
+	wrapped := tracer.WrapTool(testReadInvoicesTool, func(ctx context.Context, args ...any) (any, error) {
 		return nil, expectedErr
 	})
 	_, err := wrapped(context.Background(), map[string]any{"invoice_id": "inv_1"})

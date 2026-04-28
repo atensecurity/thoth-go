@@ -131,7 +131,7 @@ func NewBehavioralEvent(input BehavioralEventInput) BehavioralEvent {
 		SourceType:       input.SourceType,
 		EventType:        input.EventType,
 		ToolName:         input.ToolName,
-		Content:          ensureContent(input.Content, input.EventType, input.ToolName),
+		Content:          ensureContent(input.Content, input.EventType),
 		Metadata:         input.Metadata,
 		ApprovedScope:    input.ApprovedScope,
 		EnforcementMode:  input.EnforcementMode,
@@ -142,7 +142,7 @@ func NewBehavioralEvent(input BehavioralEventInput) BehavioralEvent {
 	}
 }
 
-func ensureContent(content string, eventType EventType, toolName string) string {
+func ensureContent(content string, eventType EventType) string {
 	if strings.TrimSpace(content) != "" {
 		return content
 	}

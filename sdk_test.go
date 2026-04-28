@@ -15,6 +15,9 @@ import (
 	sdk "github.com/atensecurity/thoth-go"
 )
 
+const enforcePath = "/v1/enforce"
+const testHello = "hello"
+
 // enforcerResponse mirrors the internal EnforcementDecision shape sent over the wire.
 type enforcerResponse struct {
 	Decision              string         `json:"decision,omitempty"`
@@ -89,7 +92,7 @@ func TestNewClientFromEnv(t *testing.T) {
 func TestNewClientFromEnv_UsesTHOTHENVIRONMENTFallback(t *testing.T) {
 	var got capturedEnforceRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/enforce" {
+		if r.URL.Path != enforcePath {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -117,7 +120,7 @@ func TestNewClientFromEnv_UsesTHOTHENVIRONMENTFallback(t *testing.T) {
 	tool := client.WrapTool("echo", func(_ context.Context, input string) (string, error) {
 		return input, nil
 	})
-	_, err = tool(context.Background(), "hello")
+	_, err = tool(context.Background(), testHello)
 	if err != nil {
 		t.Fatalf("WrapTool with env fallback: unexpected error: %v", err)
 	}
@@ -231,7 +234,7 @@ func TestWrapToolStepUp(t *testing.T) {
 	// The step-up endpoint always returns 202 to simulate pending approval.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/v1/enforce":
+		case r.URL.Path == enforcePath:
 			// Return STEP_UP on the enforce check.
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(enforcerResponse{
@@ -473,7 +476,7 @@ func TestWrapToolEnforcerDown(t *testing.T) {
 func TestWrapToolUsesUnifiedAPIURL(t *testing.T) {
 	var enforceHits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/enforce" {
+		if r.URL.Path == enforcePath {
 			atomic.AddInt32(&enforceHits, 1)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -539,7 +542,7 @@ func TestWrapToolFunc(t *testing.T) {
 func TestWrapToolFunc_SendsToolArgsToEnforcer(t *testing.T) {
 	var got capturedEnforceRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/enforce" {
+		if r.URL.Path != enforcePath {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -649,7 +652,7 @@ func TestWrapOpenAITools_legacyAlias_BlocksOnPolicyDecision(t *testing.T) {
 func TestWrapTool_DefaultsEnvironmentAndTraceID(t *testing.T) {
 	var got capturedEnforceRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/enforce" {
+		if r.URL.Path != enforcePath {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -666,12 +669,12 @@ func TestWrapTool_DefaultsEnvironmentAndTraceID(t *testing.T) {
 		return input, nil
 	})
 
-	out, err := tool(context.Background(), "hello")
+	out, err := tool(context.Background(), testHello)
 	if err != nil {
 		t.Fatalf("WrapTool(default env/trace): unexpected error: %v", err)
 	}
-	if out != "hello" {
-		t.Fatalf("WrapTool(default env/trace): got %q, want %q", out, "hello")
+	if out != testHello {
+		t.Fatalf("WrapTool(default env/trace): got %q, want %q", out, testHello)
 	}
 	if got.Environment != "prod" {
 		t.Fatalf("environment = %q, want %q", got.Environment, "prod")
@@ -687,7 +690,7 @@ func TestWrapTool_DefaultsEnvironmentAndTraceID(t *testing.T) {
 func TestWrapTool_UsesConfiguredEnvironmentAndTraceID(t *testing.T) {
 	var got capturedEnforceRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/enforce" {
+		if r.URL.Path != enforcePath {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -717,12 +720,12 @@ func TestWrapTool_UsesConfiguredEnvironmentAndTraceID(t *testing.T) {
 		return input, nil
 	})
 
-	out, err := tool(context.Background(), "hello")
+	out, err := tool(context.Background(), testHello)
 	if err != nil {
 		t.Fatalf("WrapTool(explicit env/trace): unexpected error: %v", err)
 	}
-	if out != "hello" {
-		t.Fatalf("WrapTool(explicit env/trace): got %q, want %q", out, "hello")
+	if out != testHello {
+		t.Fatalf("WrapTool(explicit env/trace): got %q, want %q", out, testHello)
 	}
 	if got.Environment != "dev" {
 		t.Fatalf("environment = %q, want %q", got.Environment, "dev")
@@ -735,7 +738,7 @@ func TestWrapTool_UsesConfiguredEnvironmentAndTraceID(t *testing.T) {
 func TestWrapTool_PropagatesUserScopeAndSessionIntent(t *testing.T) {
 	var got capturedEnforceRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/enforce" {
+		if r.URL.Path != enforcePath {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -765,12 +768,12 @@ func TestWrapTool_PropagatesUserScopeAndSessionIntent(t *testing.T) {
 	tool := client.WrapTool("read_file", func(_ context.Context, input string) (string, error) {
 		return input, nil
 	})
-	out, err := tool(context.Background(), "hello")
+	out, err := tool(context.Background(), testHello)
 	if err != nil {
 		t.Fatalf("WrapTool(user/scope/intent): unexpected error: %v", err)
 	}
-	if out != "hello" {
-		t.Fatalf("WrapTool(user/scope/intent): got %q, want %q", out, "hello")
+	if out != testHello {
+		t.Fatalf("WrapTool(user/scope/intent): got %q, want %q", out, testHello)
 	}
 	if got.UserID != "user-456" {
 		t.Fatalf("user_id = %q, want %q", got.UserID, "user-456")
@@ -811,12 +814,12 @@ func TestStartSession(t *testing.T) {
 	echo := sess.WrapTool("echo", func(_ context.Context, s string) (string, error) {
 		return s, nil
 	})
-	out, err := echo(context.Background(), "hello")
+	out, err := echo(context.Background(), testHello)
 	if err != nil {
 		t.Fatalf("Session.WrapTool: %v", err)
 	}
-	if out != "hello" {
-		t.Errorf("Session.WrapTool echo: got %q, want %q", out, "hello")
+	if out != testHello {
+		t.Errorf("Session.WrapTool echo: got %q, want %q", out, testHello)
 	}
 
 	sess.Close()
