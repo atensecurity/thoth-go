@@ -70,7 +70,7 @@ func Instrument(agent any, cfg Config) *Tracer {
 	// Create an HTTP emitter for event emission using the hosted API.
 	var emitter Emitter
 	if cfg.APIKey != "" {
-		emitter = NewHTTPEmitter(cfg.APIURL, cfg.APIKey)
+		emitter = NewHTTPEmitterWithEventIngestToken(cfg.APIURL, cfg.APIKey, cfg.EventIngestToken)
 	}
 
 	tracer := NewTracer(cfg, sess, emitter)

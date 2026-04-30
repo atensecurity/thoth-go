@@ -28,6 +28,7 @@
 // Environment variable fallbacks (lowest priority, overridden by Config fields):
 //
 //	THOTH_API_KEY    — API key for hosted Thoth authentication
+//	THOTH_EVENT_INGEST_TOKEN — optional dedicated token for /v1/events/batch
 //	THOTH_TENANT_ID  — tenant identifier
 //	THOTH_AGENT_ID   — agent identifier
 //	THOTH_API_URL    — unified tenant API base URL override (enforcement + events)
@@ -58,6 +59,11 @@ type Config struct {
 	// APIKey is the Thoth API key for hosted authentication.
 	// Env fallback: THOTH_API_KEY.
 	APIKey string
+
+	// EventIngestToken is an optional dedicated token for event ingestion.
+	// When set, SDK sends X-Thoth-Event-Ingest-Token on /v1/events/batch.
+	// Env fallback: THOTH_EVENT_INGEST_TOKEN.
+	EventIngestToken string
 
 	// TenantID is your organization's Thoth tenant identifier.
 	// Env fallback: THOTH_TENANT_ID.
@@ -112,6 +118,9 @@ func applyEnvFallbacks(cfg Config) Config {
 	if cfg.APIKey == "" {
 		cfg.APIKey = os.Getenv("THOTH_API_KEY")
 	}
+	if cfg.EventIngestToken == "" {
+		cfg.EventIngestToken = os.Getenv("THOTH_EVENT_INGEST_TOKEN")
+	}
 	if cfg.TenantID == "" {
 		cfg.TenantID = os.Getenv("THOTH_TENANT_ID")
 	}
@@ -156,10 +165,11 @@ func applyEnvFallbacks(cfg Config) Config {
 
 func toInternalConfig(cfg Config) ithoth.Config {
 	internal := ithoth.Config{
-		AgentID:  cfg.AgentID,
-		TenantID: cfg.TenantID,
-		APIKey:   cfg.APIKey,
-		APIURL:   cfg.APIURL,
+		AgentID:          cfg.AgentID,
+		TenantID:         cfg.TenantID,
+		APIKey:           cfg.APIKey,
+		EventIngestToken: cfg.EventIngestToken,
+		APIURL:           cfg.APIURL,
 		// Enforce a single URL contract for SDK users.
 		EnforcerURL:        cfg.APIURL,
 		Environment:        cfg.Environment,
@@ -190,7 +200,11 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("thoth: APIURL is required (set Config.APIURL or THOTH_API_URL)")
 	}
 	internalCfg := toInternalConfig(cfg)
-	emitter := ithoth.NewHTTPEmitter(internalCfg.APIURL, internalCfg.APIKey)
+	emitter := ithoth.NewHTTPEmitterWithEventIngestToken(
+		internalCfg.APIURL,
+		internalCfg.APIKey,
+		internalCfg.EventIngestToken,
+	)
 	sess := ithoth.NewSessionContext(internalCfg)
 	tracer := ithoth.NewTracer(internalCfg, sess, emitter)
 

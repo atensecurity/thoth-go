@@ -160,11 +160,12 @@ func TestHTTPEmitter_SendsDualAuthHeaders(t *testing.T) {
 	t.Parallel()
 
 	type requestCapture struct {
-		path          string
-		authorization string
-		xAPIKey       string
-		contentType   string
-		body          string
+		path              string
+		authorization     string
+		xAPIKey           string
+		xEventIngestToken string
+		contentType       string
+		body              string
 	}
 
 	var (
@@ -176,11 +177,12 @@ func TestHTTPEmitter_SendsDualAuthHeaders(t *testing.T) {
 		payload, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		captures = append(captures, requestCapture{
-			path:          r.URL.Path,
-			authorization: r.Header.Get("Authorization"),
-			xAPIKey:       r.Header.Get("X-Api-Key"),
-			contentType:   r.Header.Get("Content-Type"),
-			body:          string(payload),
+			path:              r.URL.Path,
+			authorization:     r.Header.Get("Authorization"),
+			xAPIKey:           r.Header.Get("X-Api-Key"),
+			xEventIngestToken: r.Header.Get("X-Thoth-Event-Ingest-Token"),
+			contentType:       r.Header.Get("Content-Type"),
+			body:              string(payload),
 		})
 		mu.Unlock()
 		w.WriteHeader(http.StatusAccepted)
@@ -207,6 +209,9 @@ func TestHTTPEmitter_SendsDualAuthHeaders(t *testing.T) {
 	if req.xAPIKey != "aten_test_key" {
 		t.Fatalf("missing/invalid X-Api-Key header: %q", req.xAPIKey)
 	}
+	if req.xEventIngestToken != "" {
+		t.Fatalf("expected no X-Thoth-Event-Ingest-Token, got: %q", req.xEventIngestToken)
+	}
 	if req.contentType != "application/json" {
 		t.Fatalf("unexpected content-type: %q", req.contentType)
 	}
@@ -218,6 +223,26 @@ func TestHTTPEmitter_SendsDualAuthHeaders(t *testing.T) {
 	events, ok := decoded["events"].([]any)
 	if !ok || len(events) != 1 {
 		t.Fatalf("expected single event payload, got: %#v", decoded["events"])
+	}
+}
+
+func TestHTTPEmitter_SendsEventIngestTokenHeader(t *testing.T) {
+	t.Parallel()
+
+	var captured string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		captured = r.Header.Get("X-Thoth-Event-Ingest-Token")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	e := thoth.NewHTTPEmitterWithEventIngestToken(server.URL, "aten_test_key", "ingest-token-123")
+	e.Emit(newTestEvent())
+	e.Close()
+
+	if captured != "ingest-token-123" {
+		t.Fatalf("missing/invalid X-Thoth-Event-Ingest-Token header: %q", captured)
 	}
 }
 

@@ -130,21 +130,30 @@ func (e *SQSEmitter) sendBatch(ctx context.Context, events []*BehavioralEvent) {
 // Emit is non-blocking; events are dropped when the buffer is full.
 // Call Close() to flush remaining events and stop the background goroutine.
 type HTTPEmitter struct {
-	endpoint string
-	apiKey   string
-	http     *http.Client
-	ch       chan *BehavioralEvent
-	wg       sync.WaitGroup
+	endpoint         string
+	apiKey           string
+	eventIngestToken string
+	http             *http.Client
+	ch               chan *BehavioralEvent
+	wg               sync.WaitGroup
 }
 
 // NewHTTPEmitter creates an HTTPEmitter that sends events to {apiURL}/v1/events/batch
 // with Bearer token authentication. Starts a background drain goroutine.
 func NewHTTPEmitter(apiURL, apiKey string) *HTTPEmitter {
+	return NewHTTPEmitterWithEventIngestToken(apiURL, apiKey, "")
+}
+
+// NewHTTPEmitterWithEventIngestToken creates an HTTPEmitter that sends events to
+// {apiURL}/v1/events/batch with standard API-key auth headers and, optionally,
+// X-Thoth-Event-Ingest-Token for dedicated ingest auth.
+func NewHTTPEmitterWithEventIngestToken(apiURL, apiKey, eventIngestToken string) *HTTPEmitter {
 	e := &HTTPEmitter{
-		endpoint: strings.TrimRight(apiURL, "/") + "/v1/events/batch",
-		apiKey:   apiKey,
-		http:     &http.Client{},
-		ch:       make(chan *BehavioralEvent, emitterBufSize),
+		endpoint:         strings.TrimRight(apiURL, "/") + "/v1/events/batch",
+		apiKey:           strings.TrimSpace(apiKey),
+		eventIngestToken: strings.TrimSpace(eventIngestToken),
+		http:             &http.Client{},
+		ch:               make(chan *BehavioralEvent, emitterBufSize),
 	}
 	e.wg.Add(1)
 	go e.drainLoop()
@@ -219,6 +228,9 @@ func (e *HTTPEmitter) sendBatch(events []*BehavioralEvent) {
 		req.Header.Set("Authorization", "Bearer "+e.apiKey)
 		req.Header.Set("X-Api-Key", e.apiKey)
 	}
+	if e.eventIngestToken != "" {
+		req.Header.Set("X-Thoth-Event-Ingest-Token", e.eventIngestToken)
+	}
 
 	resp, err := e.http.Do(req)
 	if err != nil {
@@ -235,12 +247,17 @@ func (e *HTTPEmitter) sendBatch(events []*BehavioralEvent) {
 		} else {
 			errBody = strings.TrimSpace(string(bodyBytes))
 		}
+		hint := ""
+		if resp.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(errBody), "<html") {
+			hint = "403 HTML usually means ingress/WAF blocked telemetry before enforcer auth; exclude /v1/events* from managed body-inspection rules while keeping auth/rate/IP controls."
+		}
 		slog.Error(
 			"thoth: http emitter unexpected status; events dropped",
 			"status", resp.StatusCode,
 			"status_text", resp.Status,
 			"url", e.endpoint,
 			"response_body", errBody,
+			"hint", hint,
 			"count", len(events),
 			"dropped", true,
 		)

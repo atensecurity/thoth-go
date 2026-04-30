@@ -232,6 +232,9 @@ type Config struct {
 	EnforcerURL string
 	// APIKey is the Thoth API key for hosted authentication.
 	APIKey string
+	// EventIngestToken is an optional dedicated token for /v1/events/batch.
+	// When set, SDK sends X-Thoth-Event-Ingest-Token on telemetry ingest calls.
+	EventIngestToken string
 	// APIURL is the unified tenant API base URL used for hosted event emission and,
 	// when EnforcerURL is omitted, enforcement checks.
 	APIURL string
