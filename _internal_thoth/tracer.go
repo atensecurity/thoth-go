@@ -2,6 +2,7 @@ package thoth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -105,19 +106,32 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			),
 			SessionIntent: t.cfg.SessionIntent,
 		}
-		t.emitLifecycleEvent(name, EventToolCallPre, "tool invocation requested", "", sessionToolCalls, map[string]any{
-			"enforcement_trace_id": checkReq.EnforcementTraceID,
-			"environment":          checkReq.Environment,
-		})
+		baseMetadata := t.baseToolMetadata(
+			name,
+			checkReq.ToolArgs,
+			checkReq.EnforcementTraceID,
+			checkReq.Environment,
+		)
+		t.emitLifecycleEvent(
+			name,
+			EventToolCallPre,
+			"tool invocation requested",
+			"",
+			sessionToolCalls,
+			mergeMetadata(baseMetadata, map[string]any{"event_phase": "pre"}),
+		)
+		startedAt := time.Now()
 
 		if t.cfg.Enforcement == Observe {
+			var finalDecision *EnforcementDecision
 			dec, err := t.enforcer.Check(ctx, checkReq)
 			if err != nil {
 				log.Printf("thoth: observe: enforcer unavailable for %q: %v", name, err)
 			} else {
 				t.logDecision(name, checkReq.EnforcementTraceID, dec, "observe")
+				finalDecision = &dec
 			}
-			return t.runTool(ctx, name, fn, args, sessionToolCalls)
+			return t.runTool(ctx, name, fn, args, sessionToolCalls, startedAt, finalDecision, baseMetadata)
 		}
 
 		dec, err := t.enforcer.Check(ctx, checkReq)
@@ -127,19 +141,14 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 		}
 		t.logDecision(name, checkReq.EnforcementTraceID, dec, "enforce")
 		effectiveArgs := args
+		finalDecision := dec
 
 		switch dec.Decision {
 		case DecisionBlock:
-			t.emitBlockEvent(name, dec, sessionToolCalls)
-			return nil, &PolicyViolationError{
-				ToolName:             name,
-				Reason:               dec.Reason,
-				ViolationID:          dec.ViolationID,
-				DecisionReasonCode:   dec.DecisionReasonCode,
-				ActionClassification: dec.ActionClassification,
-			}
+			t.emitBlockEvent(name, dec, sessionToolCalls, startedAt, baseMetadata)
+			return nil, policyViolationFromDecision(name, dec.Reason, dec)
 		case DecisionDefer:
-			t.emitBlockEvent(name, dec, sessionToolCalls)
+			t.emitBlockEvent(name, dec, sessionToolCalls, startedAt, baseMetadata)
 			reason := dec.DeferReason
 			if reason == "" {
 				reason = dec.Reason
@@ -150,13 +159,7 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			if dec.DeferTimeoutSeconds > 0 {
 				reason = fmt.Sprintf("%s (retry in %ds)", reason, dec.DeferTimeoutSeconds)
 			}
-			return nil, &PolicyViolationError{
-				ToolName:             name,
-				Reason:               reason,
-				ViolationID:          dec.ViolationID,
-				DecisionReasonCode:   dec.DecisionReasonCode,
-				ActionClassification: dec.ActionClassification,
-			}
+			return nil, policyViolationFromDecision(name, reason, dec)
 		case DecisionModify:
 			effectiveArgs = applyModifiedArgs(args, dec.ModifiedToolArgs)
 		case DecisionStepUp:
@@ -164,19 +167,49 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			defer cancel()
 			stepDec := t.stepUp.Wait(stepCtx, dec.HoldToken)
 			t.logDecision(name, checkReq.EnforcementTraceID, stepDec, "step_up_resolved")
+			finalDecision = stepDec
 			if stepDec.Decision == DecisionBlock {
-				t.emitBlockEvent(name, stepDec, sessionToolCalls)
-				return nil, &PolicyViolationError{
-					ToolName:             name,
-					Reason:               fmt.Sprintf("step-up auth required: %s", stepDec.Reason),
-					ViolationID:          dec.ViolationID,
-					DecisionReasonCode:   coalesceNonEmpty(stepDec.DecisionReasonCode, dec.DecisionReasonCode),
-					ActionClassification: coalesceNonEmpty(stepDec.ActionClassification, dec.ActionClassification),
+				t.emitBlockEvent(name, stepDec, sessionToolCalls, startedAt, baseMetadata)
+				merged := mergeDecisionContext(stepDec, dec)
+				merged.Reason = fmt.Sprintf("step-up auth required: %s", stepDec.Reason)
+				return nil, policyViolationFromDecision(name, merged.Reason, merged)
+			}
+			if stepDec.Decision == DecisionDefer {
+				t.emitBlockEvent(name, stepDec, sessionToolCalls, startedAt, baseMetadata)
+				reason := stepDec.DeferReason
+				if reason == "" {
+					reason = stepDec.Reason
 				}
+				if reason == "" {
+					reason = "deferred pending additional context"
+				}
+				if stepDec.DeferTimeoutSeconds > 0 {
+					reason = fmt.Sprintf("%s (retry in %ds)", reason, stepDec.DeferTimeoutSeconds)
+				}
+				merged := mergeDecisionContext(stepDec, dec)
+				return nil, policyViolationFromDecision(name, reason, merged)
+			}
+			if stepDec.Decision == DecisionStepUp {
+				unresolved := mergeDecisionContext(stepDec, dec)
+				unresolved.Reason = coalesceNonEmpty(unresolved.Reason, "step-up unresolved")
+				t.emitBlockEvent(name, unresolved, sessionToolCalls, startedAt, baseMetadata)
+				return nil, policyViolationFromDecision(name, unresolved.Reason, unresolved)
+			}
+			if stepDec.Decision == DecisionModify {
+				effectiveArgs = applyModifiedArgs(args, stepDec.ModifiedToolArgs)
 			}
 		}
 
-		return t.runTool(ctx, name, fn, effectiveArgs, sessionToolCalls)
+		return t.runTool(
+			ctx,
+			name,
+			fn,
+			effectiveArgs,
+			sessionToolCalls,
+			startedAt,
+			&finalDecision,
+			baseMetadata,
+		)
 	}
 }
 
@@ -204,6 +237,89 @@ func coalesceNonEmpty(primary, fallback string) string {
 		return primary
 	}
 	return fallback
+}
+
+func cloneStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
+}
+
+func cloneMap(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func mergeDecisionContext(primary, fallback EnforcementDecision) EnforcementDecision {
+	merged := primary
+	merged.ViolationID = coalesceNonEmpty(merged.ViolationID, fallback.ViolationID)
+	merged.AuthorizationDecision = coalesceNonEmpty(merged.AuthorizationDecision, fallback.AuthorizationDecision)
+	merged.DecisionReasonCode = coalesceNonEmpty(merged.DecisionReasonCode, fallback.DecisionReasonCode)
+	merged.ActionClassification = coalesceNonEmpty(merged.ActionClassification, fallback.ActionClassification)
+	merged.PackID = coalesceNonEmpty(merged.PackID, fallback.PackID)
+	merged.PackVersion = coalesceNonEmpty(merged.PackVersion, fallback.PackVersion)
+	if merged.RuleVersion == 0 {
+		merged.RuleVersion = fallback.RuleVersion
+	}
+	if merged.RiskScore == 0 && fallback.RiskScore != 0 {
+		merged.RiskScore = fallback.RiskScore
+	}
+	if merged.LatencyMs == 0 && fallback.LatencyMs != 0 {
+		merged.LatencyMs = fallback.LatencyMs
+	}
+	if len(merged.RegulatoryRegimes) == 0 {
+		merged.RegulatoryRegimes = cloneStringSlice(fallback.RegulatoryRegimes)
+	}
+	if len(merged.MatchedRuleIDs) == 0 {
+		merged.MatchedRuleIDs = cloneStringSlice(fallback.MatchedRuleIDs)
+	}
+	if len(merged.MatchedControlIDs) == 0 {
+		merged.MatchedControlIDs = cloneStringSlice(fallback.MatchedControlIDs)
+	}
+	if len(merged.PolicyReferences) == 0 {
+		merged.PolicyReferences = cloneStringSlice(fallback.PolicyReferences)
+	}
+	if len(merged.ModelSignals) == 0 {
+		merged.ModelSignals = cloneStringSlice(fallback.ModelSignals)
+	}
+	if len(merged.Receipt) == 0 {
+		merged.Receipt = cloneMap(fallback.Receipt)
+	}
+	return merged
+}
+
+func policyViolationFromDecision(toolName, reason string, decision EnforcementDecision) *PolicyViolationError {
+	authDecision := coalesceNonEmpty(decision.AuthorizationDecision, string(decision.Decision))
+	return &PolicyViolationError{
+		ToolName:              toolName,
+		Reason:                reason,
+		ViolationID:           decision.ViolationID,
+		DecisionReasonCode:    decision.DecisionReasonCode,
+		ActionClassification:  decision.ActionClassification,
+		AuthorizationDecision: authDecision,
+		DeferTimeoutSeconds:   decision.DeferTimeoutSeconds,
+		StepUpTimeoutSeconds:  decision.StepUpTimeoutSeconds,
+		RiskScore:             decision.RiskScore,
+		LatencyMs:             decision.LatencyMs,
+		PackID:                decision.PackID,
+		PackVersion:           decision.PackVersion,
+		RuleVersion:           decision.RuleVersion,
+		RegulatoryRegimes:     cloneStringSlice(decision.RegulatoryRegimes),
+		MatchedRuleIDs:        cloneStringSlice(decision.MatchedRuleIDs),
+		MatchedControlIDs:     cloneStringSlice(decision.MatchedControlIDs),
+		PolicyReferences:      cloneStringSlice(decision.PolicyReferences),
+		ModelSignals:          cloneStringSlice(decision.ModelSignals),
+		Receipt:               cloneMap(decision.Receipt),
+	}
 }
 
 func applyModifiedArgs(args []any, modified map[string]any) []any {
@@ -313,26 +429,78 @@ func withCurrentToolCall(toolCalls []string, toolName string) []string {
 	return out
 }
 
-func (t *Tracer) runTool(ctx context.Context, name string, fn ToolFunc, args []any, sessionToolCalls []string) (any, error) {
+func (t *Tracer) runTool(
+	ctx context.Context,
+	name string,
+	fn ToolFunc,
+	args []any,
+	sessionToolCalls []string,
+	startedAt time.Time,
+	finalDecision *EnforcementDecision,
+	baseMetadata map[string]any,
+) (any, error) {
 	result, toolErr := fn(ctx, args...)
 	t.session.RecordToolCall(name)
 	if toolErr != nil {
 		return result, toolErr
 	}
-	eventMetadata := map[string]any{
-		"result_type": fmt.Sprintf("%T", result),
+	eventMetadata := mergeMetadata(baseMetadata, decisionMetadata(finalDecision))
+	eventMetadata["event_phase"] = "post"
+	eventMetadata["duration_ms"] = time.Since(startedAt).Milliseconds()
+	eventMetadata["result_type"] = fmt.Sprintf("%T", result)
+	if size := payloadSizeBytes(result); size > 0 {
+		eventMetadata["result_size_bytes"] = size
 	}
 	t.emitLifecycleEvent(name, EventToolCallPost, "tool invocation completed", "", sessionToolCalls, eventMetadata)
 	return result, toolErr
 }
 
-func (t *Tracer) emitBlockEvent(name string, decision EnforcementDecision, sessionToolCalls []string) {
+func (t *Tracer) emitBlockEvent(
+	name string,
+	decision EnforcementDecision,
+	sessionToolCalls []string,
+	startedAt time.Time,
+	baseMetadata map[string]any,
+) {
 	reason := decision.Reason
 	if reason == "" {
 		reason = decision.DeferReason
 	}
-	metadata := map[string]any{
-		"decision": decision.Decision,
+	metadata := mergeMetadata(baseMetadata, decisionMetadata(&decision))
+	metadata["event_phase"] = "block"
+	metadata["duration_ms"] = time.Since(startedAt).Milliseconds()
+	t.emitLifecycleEvent(name, EventToolCallBlock, reason, decision.ViolationID, sessionToolCalls, metadata)
+}
+
+func (t *Tracer) baseToolMetadata(
+	toolName string,
+	toolArgs map[string]any,
+	enforcementTraceID string,
+	environment string,
+) map[string]any {
+	return map[string]any{
+		"sdk_language":         "go",
+		"environment":          environment,
+		"enforcement_trace_id": enforcementTraceID,
+		"tool_call": map[string]any{
+			"name":      toolName,
+			"arguments": toolArgs,
+		},
+		"tool_args": toolArgs,
+	}
+}
+
+func decisionMetadata(decision *EnforcementDecision) map[string]any {
+	if decision == nil {
+		return map[string]any{}
+	}
+	metadata := map[string]any{}
+	authDecision := decision.AuthorizationDecision
+	if authDecision == "" {
+		authDecision = string(decision.Decision)
+	}
+	if authDecision != "" {
+		metadata["authorization_decision"] = authDecision
 	}
 	if decision.DecisionReasonCode != "" {
 		metadata["decision_reason_code"] = decision.DecisionReasonCode
@@ -340,16 +508,65 @@ func (t *Tracer) emitBlockEvent(name string, decision EnforcementDecision, sessi
 	if decision.ActionClassification != "" {
 		metadata["action_classification"] = decision.ActionClassification
 	}
-	if decision.AuthorizationDecision != "" {
-		metadata["authorization_decision"] = decision.AuthorizationDecision
-	}
 	if decision.DeferTimeoutSeconds > 0 {
 		metadata["defer_timeout_seconds"] = decision.DeferTimeoutSeconds
 	}
 	if decision.StepUpTimeoutSeconds > 0 {
 		metadata["step_up_timeout_seconds"] = decision.StepUpTimeoutSeconds
 	}
-	t.emitLifecycleEvent(name, EventToolCallBlock, reason, decision.ViolationID, sessionToolCalls, metadata)
+	if decision.RiskScore != 0 {
+		metadata["risk_score"] = decision.RiskScore
+	}
+	if decision.LatencyMs != 0 {
+		metadata["latency_ms"] = decision.LatencyMs
+	}
+	if decision.PackID != "" {
+		metadata["pack_id"] = decision.PackID
+	}
+	if decision.PackVersion != "" {
+		metadata["pack_version"] = decision.PackVersion
+	}
+	if decision.RuleVersion != 0 {
+		metadata["rule_version"] = decision.RuleVersion
+	}
+	if len(decision.RegulatoryRegimes) > 0 {
+		metadata["regulatory_regimes"] = cloneStringSlice(decision.RegulatoryRegimes)
+	}
+	if len(decision.MatchedRuleIDs) > 0 {
+		metadata["matched_rule_ids"] = cloneStringSlice(decision.MatchedRuleIDs)
+	}
+	if len(decision.MatchedControlIDs) > 0 {
+		metadata["matched_control_ids"] = cloneStringSlice(decision.MatchedControlIDs)
+	}
+	if len(decision.PolicyReferences) > 0 {
+		metadata["policy_references"] = cloneStringSlice(decision.PolicyReferences)
+	}
+	if len(decision.ModelSignals) > 0 {
+		metadata["model_signals"] = cloneStringSlice(decision.ModelSignals)
+	}
+	if len(decision.Receipt) > 0 {
+		metadata["receipt"] = cloneMap(decision.Receipt)
+	}
+	return metadata
+}
+
+func mergeMetadata(base map[string]any, extras map[string]any) map[string]any {
+	merged := map[string]any{}
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range extras {
+		merged[key] = value
+	}
+	return merged
+}
+
+func payloadSizeBytes(value any) int {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return 0
+	}
+	return len(payload)
 }
 
 func (t *Tracer) emitLifecycleEvent(

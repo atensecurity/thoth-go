@@ -171,6 +171,14 @@ type EnforcementDecision struct {
 	HoldToken             string         `json:"hold_token,omitempty"`
 	RiskScore             float64        `json:"risk_score,omitempty"`
 	LatencyMs             float64        `json:"latency_ms,omitempty"`
+	PackID                string         `json:"pack_id,omitempty"`
+	PackVersion           string         `json:"pack_version,omitempty"`
+	RuleVersion           int            `json:"rule_version,omitempty"`
+	RegulatoryRegimes     []string       `json:"regulatory_regimes,omitempty"`
+	MatchedRuleIDs        []string       `json:"matched_rule_ids,omitempty"`
+	MatchedControlIDs     []string       `json:"matched_control_ids,omitempty"`
+	PolicyReferences      []string       `json:"policy_references,omitempty"`
+	ModelSignals          []string       `json:"model_signals,omitempty"`
 	Receipt               map[string]any `json:"receipt,omitempty"`
 	ModifiedToolArgs      map[string]any `json:"modified_tool_args,omitempty"`
 	ModificationReason    string         `json:"modification_reason,omitempty"`

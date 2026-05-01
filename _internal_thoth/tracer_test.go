@@ -360,6 +360,21 @@ func TestWrapTool_EmitsCanonicalLifecycleEvents_AllowPath(t *testing.T) {
 	if events[1].EventType != thoth.EventToolCallPost {
 		t.Fatalf("second event type = %s, want %s", events[1].EventType, thoth.EventToolCallPost)
 	}
+	if events[0].Metadata["event_phase"] != "pre" {
+		t.Fatalf("pre event_phase = %v, want pre", events[0].Metadata["event_phase"])
+	}
+	if events[0].Metadata["sdk_language"] != "go" {
+		t.Fatalf("pre sdk_language = %v, want go", events[0].Metadata["sdk_language"])
+	}
+	if events[1].Metadata["event_phase"] != "post" {
+		t.Fatalf("post event_phase = %v, want post", events[1].Metadata["event_phase"])
+	}
+	if _, ok := events[1].Metadata["duration_ms"]; !ok {
+		t.Fatalf("post metadata missing duration_ms: %+v", events[1].Metadata)
+	}
+	if _, ok := events[1].Metadata["result_size_bytes"]; !ok {
+		t.Fatalf("post metadata missing result_size_bytes: %+v", events[1].Metadata)
+	}
 	for _, event := range events {
 		if event.EventID == "" || event.TenantID == "" || event.SessionID == "" || event.Content == "" {
 			t.Fatalf("event missing required canonical fields: %+v", event)
@@ -406,6 +421,12 @@ func TestWrapTool_EmitsPreThenBlock_OnBlockDecision(t *testing.T) {
 	}
 	if events[0].EventType != thoth.EventToolCallPre || events[1].EventType != thoth.EventToolCallBlock {
 		t.Fatalf("unexpected lifecycle order: %s -> %s", events[0].EventType, events[1].EventType)
+	}
+	if events[1].Metadata["event_phase"] != "block" {
+		t.Fatalf("block event_phase = %v, want block", events[1].Metadata["event_phase"])
+	}
+	if _, ok := events[1].Metadata["authorization_decision"]; !ok {
+		t.Fatalf("block metadata missing authorization_decision: %+v", events[1].Metadata)
 	}
 }
 

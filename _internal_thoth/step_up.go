@@ -19,10 +19,26 @@ var blockTimeout = EnforcementDecision{
 // holdStatusResponse models both the canonical HoldToken polling shape and
 // legacy direct decision payloads for backward compatibility.
 type holdStatusResponse struct {
-	Decision   DecisionType `json:"decision,omitempty"`
-	Reason     string       `json:"reason,omitempty"`
-	Resolved   bool         `json:"resolved"`
-	Resolution DecisionType `json:"resolution,omitempty"`
+	Decision              DecisionType   `json:"decision,omitempty"`
+	AuthorizationDecision string         `json:"authorization_decision,omitempty"`
+	DecisionReasonCode    string         `json:"decision_reason_code,omitempty"`
+	ActionClassification  string         `json:"action_classification,omitempty"`
+	Reason                string         `json:"reason,omitempty"`
+	ViolationID           string         `json:"violation_id,omitempty"`
+	HoldToken             string         `json:"hold_token,omitempty"`
+	RiskScore             float64        `json:"risk_score,omitempty"`
+	LatencyMs             float64        `json:"latency_ms,omitempty"`
+	PackID                string         `json:"pack_id,omitempty"`
+	PackVersion           string         `json:"pack_version,omitempty"`
+	RuleVersion           int            `json:"rule_version,omitempty"`
+	RegulatoryRegimes     []string       `json:"regulatory_regimes,omitempty"`
+	MatchedRuleIDs        []string       `json:"matched_rule_ids,omitempty"`
+	MatchedControlIDs     []string       `json:"matched_control_ids,omitempty"`
+	PolicyReferences      []string       `json:"policy_references,omitempty"`
+	ModelSignals          []string       `json:"model_signals,omitempty"`
+	Receipt               map[string]any `json:"receipt,omitempty"`
+	Resolved              bool           `json:"resolved"`
+	Resolution            DecisionType   `json:"resolution,omitempty"`
 }
 
 // StepUpClient polls the enforcement service for a step-up authentication decision.
@@ -109,10 +125,7 @@ func (c *StepUpClient) poll(ctx context.Context, holdToken string) (EnforcementD
 		if direct == DecisionType("DENY") {
 			direct = DecisionBlock
 		}
-		return EnforcementDecision{
-			Decision: direct,
-			Reason:   hold.Reason,
-		}, true
+		return decisionFromHold(hold, direct), true
 	case DecisionStepUp, "":
 		// Continue with hold-token parsing below.
 	default:
@@ -127,10 +140,7 @@ func (c *StepUpClient) poll(ctx context.Context, holdToken string) (EnforcementD
 			if resolution == DecisionType("DENY") {
 				resolution = DecisionBlock
 			}
-			return EnforcementDecision{
-				Decision: resolution,
-				Reason:   hold.Reason,
-			}, true
+			return decisionFromHold(hold, resolution), true
 		default:
 			log.Printf("thoth: warn: step-up poll resolved without valid resolution (got %q)", hold.Resolution)
 			return EnforcementDecision{}, false
@@ -138,4 +148,27 @@ func (c *StepUpClient) poll(ctx context.Context, holdToken string) (EnforcementD
 	}
 
 	return EnforcementDecision{}, false
+}
+
+func decisionFromHold(hold holdStatusResponse, decision DecisionType) EnforcementDecision {
+	return EnforcementDecision{
+		Decision:              decision,
+		AuthorizationDecision: hold.AuthorizationDecision,
+		DecisionReasonCode:    hold.DecisionReasonCode,
+		ActionClassification:  hold.ActionClassification,
+		Reason:                hold.Reason,
+		ViolationID:           hold.ViolationID,
+		HoldToken:             hold.HoldToken,
+		RiskScore:             hold.RiskScore,
+		LatencyMs:             hold.LatencyMs,
+		PackID:                hold.PackID,
+		PackVersion:           hold.PackVersion,
+		RuleVersion:           hold.RuleVersion,
+		RegulatoryRegimes:     cloneStringSlice(hold.RegulatoryRegimes),
+		MatchedRuleIDs:        cloneStringSlice(hold.MatchedRuleIDs),
+		MatchedControlIDs:     cloneStringSlice(hold.MatchedControlIDs),
+		PolicyReferences:      cloneStringSlice(hold.PolicyReferences),
+		ModelSignals:          cloneStringSlice(hold.ModelSignals),
+		Receipt:               cloneMap(hold.Receipt),
+	}
 }

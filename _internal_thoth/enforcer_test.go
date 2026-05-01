@@ -5,11 +5,45 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/atensecurity/thoth-go/_internal_thoth"
 )
+
+func loadGoldenDecisionFixture(t *testing.T, name string) map[string]any {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	fixturePath := filepath.Join(
+		filepath.Dir(currentFile),
+		"..",
+		"..",
+		"..",
+		"..",
+		"testdata",
+		"sdk",
+		"enforcement_decision_golden.json",
+	)
+	payload, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var fixtures map[string]map[string]any
+	if err := json.Unmarshal(payload, &fixtures); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	fixture, ok := fixtures[name]
+	if !ok {
+		t.Fatalf("missing fixture %q", name)
+	}
+	return fixture
+}
 
 type captureEnforceRequest struct {
 	ToolName         string         `json:"tool_name"`
@@ -78,17 +112,10 @@ func TestEnforcerClient_CheckReturnsBlock(t *testing.T) {
 
 func TestEnforcerClient_DecodesDecisionMetadataFields(t *testing.T) {
 	t.Parallel()
+	fixture := loadGoldenDecisionFixture(t, "block_full_context")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"authorization_decision": "BLOCK",
-			"decision_reason_code":   "policy_scope_violation",
-			"action_classification":  "write",
-			"reason":                 "write is out of scope",
-			"receipt": map[string]any{
-				"signature": "sig-123",
-			},
-		})
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer srv.Close()
 
@@ -103,14 +130,23 @@ func TestEnforcerClient_DecodesDecisionMetadataFields(t *testing.T) {
 	if dec.Decision != thoth.DecisionBlock {
 		t.Fatalf("Decision = %q, want %q", dec.Decision, thoth.DecisionBlock)
 	}
-	if dec.DecisionReasonCode != "policy_scope_violation" {
-		t.Fatalf("decision_reason_code = %q, want %q", dec.DecisionReasonCode, "policy_scope_violation")
+	if dec.DecisionReasonCode != "forbidden_action_static_policy" {
+		t.Fatalf("decision_reason_code = %q, want %q", dec.DecisionReasonCode, "forbidden_action_static_policy")
 	}
 	if dec.ActionClassification != "write" {
 		t.Fatalf("action_classification = %q, want %q", dec.ActionClassification, "write")
 	}
-	if dec.Receipt["signature"] != "sig-123" {
-		t.Fatalf("receipt.signature = %v, want %q", dec.Receipt["signature"], "sig-123")
+	if dec.RiskScore != 93.7 {
+		t.Fatalf("risk_score = %v, want %v", dec.RiskScore, 93.7)
+	}
+	if dec.PackID != "security-engineering" {
+		t.Fatalf("pack_id = %q, want %q", dec.PackID, "security-engineering")
+	}
+	if len(dec.ModelSignals) != 2 || dec.ModelSignals[0] != "moses_action:block" {
+		t.Fatalf("model_signals = %v, expected golden fixture entries", dec.ModelSignals)
+	}
+	if dec.Receipt["signature"] != "sig-golden-001" {
+		t.Fatalf("receipt.signature = %v, want %q", dec.Receipt["signature"], "sig-golden-001")
 	}
 }
 

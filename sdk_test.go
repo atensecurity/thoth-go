@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +16,37 @@ import (
 
 	sdk "github.com/atensecurity/thoth-go"
 )
+
+func loadGoldenDecisionFixture(t *testing.T, name string) map[string]any {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	fixturePath := filepath.Join(
+		filepath.Dir(currentFile),
+		"..",
+		"..",
+		"..",
+		"..",
+		"testdata",
+		"sdk",
+		"enforcement_decision_golden.json",
+	)
+	payload, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var fixtures map[string]map[string]any
+	if err := json.Unmarshal(payload, &fixtures); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	fixture, ok := fixtures[name]
+	if !ok {
+		t.Fatalf("missing fixture %q", name)
+	}
+	return fixture
+}
 
 const enforcePath = "/v1/enforce"
 const testHello = "hello"
@@ -27,6 +60,17 @@ type enforcerResponse struct {
 	Reason                string         `json:"reason,omitempty"`
 	ViolationID           string         `json:"violation_id,omitempty"`
 	HoldToken             string         `json:"hold_token,omitempty"`
+	RiskScore             float64        `json:"risk_score,omitempty"`
+	LatencyMs             float64        `json:"latency_ms,omitempty"`
+	PackID                string         `json:"pack_id,omitempty"`
+	PackVersion           string         `json:"pack_version,omitempty"`
+	RuleVersion           int            `json:"rule_version,omitempty"`
+	RegulatoryRegimes     []string       `json:"regulatory_regimes,omitempty"`
+	MatchedRuleIDs        []string       `json:"matched_rule_ids,omitempty"`
+	MatchedControlIDs     []string       `json:"matched_control_ids,omitempty"`
+	PolicyReferences      []string       `json:"policy_references,omitempty"`
+	ModelSignals          []string       `json:"model_signals,omitempty"`
+	Receipt               map[string]any `json:"receipt,omitempty"`
 	ModifiedToolArgs      map[string]any `json:"modified_tool_args,omitempty"`
 	ModificationReason    string         `json:"modification_reason,omitempty"`
 	DeferReason           string         `json:"defer_reason,omitempty"`
@@ -178,13 +222,16 @@ func TestWrapToolAllow(t *testing.T) {
 // TestWrapToolBlock verifies that when the enforcer returns BLOCK, the wrapped
 // tool is not executed and a *PolicyViolationError is returned.
 func TestWrapToolBlock(t *testing.T) {
-	srv := mockEnforcer(t, enforcerResponse{
-		Decision:             "BLOCK",
-		DecisionReasonCode:   "policy_scope_violation",
-		ActionClassification: "write",
-		Reason:               "unauthorized data exfiltration",
-		ViolationID:          "v-001",
-	})
+	raw := loadGoldenDecisionFixture(t, "block_full_context")
+	resp := enforcerResponse{}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+	if err := json.Unmarshal(encoded, &resp); err != nil {
+		t.Fatalf("decode fixture into response: %v", err)
+	}
+	srv := mockEnforcer(t, resp)
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
@@ -195,7 +242,7 @@ func TestWrapToolBlock(t *testing.T) {
 		return "secret", nil
 	})
 
-	_, err := exfil(context.Background(), "payload")
+	_, err = exfil(context.Background(), "payload")
 	if err == nil {
 		t.Fatal("WrapTool(block): expected error, got nil")
 	}
@@ -207,17 +254,32 @@ func TestWrapToolBlock(t *testing.T) {
 	if pve.ToolName != "exfil_data" {
 		t.Errorf("PolicyViolationError.ToolName: got %q, want %q", pve.ToolName, "exfil_data")
 	}
-	if pve.Reason != "unauthorized data exfiltration" {
-		t.Errorf("PolicyViolationError.Reason: got %q, want %q", pve.Reason, "unauthorized data exfiltration")
+	if pve.Reason != "blocked by static policy" {
+		t.Errorf("PolicyViolationError.Reason: got %q, want %q", pve.Reason, "blocked by static policy")
 	}
-	if pve.ViolationID != "v-001" {
-		t.Errorf("PolicyViolationError.ViolationID: got %q, want %q", pve.ViolationID, "v-001")
+	if pve.ViolationID != "vio-golden-001" {
+		t.Errorf("PolicyViolationError.ViolationID: got %q, want %q", pve.ViolationID, "vio-golden-001")
 	}
-	if pve.DecisionReasonCode != "policy_scope_violation" {
-		t.Errorf("PolicyViolationError.DecisionReasonCode: got %q, want %q", pve.DecisionReasonCode, "policy_scope_violation")
+	if pve.DecisionReasonCode != "forbidden_action_static_policy" {
+		t.Errorf("PolicyViolationError.DecisionReasonCode: got %q, want %q", pve.DecisionReasonCode, "forbidden_action_static_policy")
 	}
 	if pve.ActionClassification != "write" {
 		t.Errorf("PolicyViolationError.ActionClassification: got %q, want %q", pve.ActionClassification, "write")
+	}
+	if pve.AuthorizationDecision != "BLOCK" {
+		t.Errorf("PolicyViolationError.AuthorizationDecision: got %q, want %q", pve.AuthorizationDecision, "BLOCK")
+	}
+	if pve.RiskScore != 93.7 {
+		t.Errorf("PolicyViolationError.RiskScore: got %v, want %v", pve.RiskScore, 93.7)
+	}
+	if pve.PackID != "security-engineering" {
+		t.Errorf("PolicyViolationError.PackID: got %q, want %q", pve.PackID, "security-engineering")
+	}
+	if len(pve.ModelSignals) != 2 || pve.ModelSignals[0] != "moses_action:block" {
+		t.Errorf("PolicyViolationError.ModelSignals: got %v", pve.ModelSignals)
+	}
+	if pve.Receipt["signature"] != "sig-golden-001" {
+		t.Errorf("PolicyViolationError.Receipt.signature: got %v, want %q", pve.Receipt["signature"], "sig-golden-001")
 	}
 	if called {
 		t.Error("WrapTool(block): underlying tool must not be called on BLOCK")
@@ -428,6 +490,9 @@ func TestWrapToolDefer(t *testing.T) {
 	}
 	if !strings.Contains(pve.Reason, "45s") {
 		t.Fatalf("WrapTool(defer): reason = %q, expected retry timeout", pve.Reason)
+	}
+	if pve.DeferTimeoutSeconds != 45 {
+		t.Fatalf("WrapTool(defer): defer timeout = %d, want 45", pve.DeferTimeoutSeconds)
 	}
 	if called {
 		t.Fatal("WrapTool(defer): underlying tool must not execute")

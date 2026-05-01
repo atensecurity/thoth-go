@@ -17,6 +17,34 @@ type PolicyViolationError struct {
 	DecisionReasonCode string
 	// ActionClassification is the policy action class (read/write/execute/etc.).
 	ActionClassification string
+	// AuthorizationDecision is the canonical authorization decision string.
+	AuthorizationDecision string
+	// DeferTimeoutSeconds is the enforcer-provided suggested retry delay.
+	DeferTimeoutSeconds int
+	// StepUpTimeoutSeconds is the timeout budget for step-up approval windows.
+	StepUpTimeoutSeconds int
+	// RiskScore is the model/rule risk score used for policy decisions.
+	RiskScore float64
+	// LatencyMs is end-to-end policy evaluation latency in milliseconds.
+	LatencyMs float64
+	// PackID identifies the active policy pack.
+	PackID string
+	// PackVersion identifies the active pack version.
+	PackVersion string
+	// RuleVersion identifies the active policy rule version.
+	RuleVersion int
+	// RegulatoryRegimes indicates the regimes associated with the applied policy.
+	RegulatoryRegimes []string
+	// MatchedRuleIDs are the matched policy rule identifiers.
+	MatchedRuleIDs []string
+	// MatchedControlIDs are the matched control identifiers.
+	MatchedControlIDs []string
+	// PolicyReferences are framework/control references mapped to the decision.
+	PolicyReferences []string
+	// ModelSignals are explainability signals from deterministic/ML engines.
+	ModelSignals []string
+	// Receipt is the decision receipt payload when available.
+	Receipt map[string]any
 }
 
 // Error implements the error interface.

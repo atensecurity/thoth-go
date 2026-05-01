@@ -108,16 +108,41 @@ func translateError(err error) error {
 			return sue
 		}
 		return &PolicyViolationError{
-			ToolName:             pve.ToolName,
-			Reason:               pve.Reason,
-			ViolationID:          pve.ViolationID,
-			DecisionReasonCode:   pve.DecisionReasonCode,
-			ActionClassification: pve.ActionClassification,
+			ToolName:              pve.ToolName,
+			Reason:                pve.Reason,
+			ViolationID:           pve.ViolationID,
+			DecisionReasonCode:    pve.DecisionReasonCode,
+			ActionClassification:  pve.ActionClassification,
+			AuthorizationDecision: pve.AuthorizationDecision,
+			DeferTimeoutSeconds:   pve.DeferTimeoutSeconds,
+			StepUpTimeoutSeconds:  pve.StepUpTimeoutSeconds,
+			RiskScore:             pve.RiskScore,
+			LatencyMs:             pve.LatencyMs,
+			PackID:                pve.PackID,
+			PackVersion:           pve.PackVersion,
+			RuleVersion:           pve.RuleVersion,
+			RegulatoryRegimes:     append([]string{}, pve.RegulatoryRegimes...),
+			MatchedRuleIDs:        append([]string{}, pve.MatchedRuleIDs...),
+			MatchedControlIDs:     append([]string{}, pve.MatchedControlIDs...),
+			PolicyReferences:      append([]string{}, pve.PolicyReferences...),
+			ModelSignals:          append([]string{}, pve.ModelSignals...),
+			Receipt:               cloneAnyMap(pve.Receipt),
 		}
 	}
 
 	log.Printf("thoth: sdk: unhandled internal error type %T: %v", err, err)
 	return err
+}
+
+func cloneAnyMap(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 var holdTokenPatterns = [...]*regexp.Regexp{
