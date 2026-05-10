@@ -16,21 +16,24 @@ import (
 const defaultEnforcerTimeout = 5 * time.Second
 
 type enforcerRequest struct {
-	RequestID        string          `json:"request_id"`
-	AgentID          string          `json:"agent_id"`
-	TenantID         string          `json:"tenant_id"`
-	ToolName         string          `json:"tool_name"`
-	SessionID        string          `json:"session_id"`
-	UserID           string          `json:"user_id"`
-	IdentityBinding  map[string]any  `json:"identity_binding,omitempty"`
-	ApprovedScope    []string        `json:"approved_scope"`
-	SessionToolCalls []string        `json:"session_tool_calls"`
-	ToolArgs         map[string]any  `json:"tool_args,omitempty"`
-	EnforcementMode  EnforcementMode `json:"enforcement_mode"`
-	Environment      string          `json:"environment"`
-	TraceID          string          `json:"enforcement_trace_id,omitempty"`
-	OccurredAt       time.Time       `json:"occurred_at"`
-	SessionIntent    string          `json:"session_intent,omitempty"`
+	RequestID          string          `json:"request_id"`
+	AgentID            string          `json:"agent_id"`
+	TenantID           string          `json:"tenant_id"`
+	ToolName           string          `json:"tool_name"`
+	SessionID          string          `json:"session_id"`
+	UserID             string          `json:"user_id"`
+	IdentityBinding    map[string]any  `json:"identity_binding,omitempty"`
+	ApprovedScope      []string        `json:"approved_scope"`
+	SessionToolCalls   []string        `json:"session_tool_calls"`
+	ToolArgs           map[string]any  `json:"tool_args,omitempty"`
+	EnforcementMode    EnforcementMode `json:"enforcement_mode"`
+	Environment        string          `json:"environment"`
+	TraceID            string          `json:"enforcement_trace_id,omitempty"`
+	OccurredAt         time.Time       `json:"occurred_at"`
+	SessionIntent      string          `json:"session_intent,omitempty"`
+	Purpose            string          `json:"purpose,omitempty"`
+	DataClassification string          `json:"data_classification,omitempty"`
+	TaskContext        map[string]any  `json:"task_context,omitempty"`
 }
 
 // EnforcerClient calls the Thoth enforcement service to obtain a pre-execution decision.
@@ -71,21 +74,24 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 	}
 
 	reqBody := enforcerRequest{
-		RequestID:        uuid.New().String(),
-		AgentID:          check.AgentID,
-		TenantID:         check.TenantID,
-		ToolName:         check.ToolName,
-		SessionID:        check.SessionID,
-		UserID:           check.UserID,
-		IdentityBinding:  check.IdentityBinding,
-		ApprovedScope:    approvedScope,
-		SessionToolCalls: sessionToolCalls,
-		ToolArgs:         check.ToolArgs,
-		EnforcementMode:  check.EnforcementMode,
-		Environment:      check.Environment,
-		TraceID:          check.EnforcementTraceID,
-		OccurredAt:       time.Now().UTC(),
-		SessionIntent:    check.SessionIntent,
+		RequestID:          uuid.New().String(),
+		AgentID:            check.AgentID,
+		TenantID:           check.TenantID,
+		ToolName:           check.ToolName,
+		SessionID:          check.SessionID,
+		UserID:             check.UserID,
+		IdentityBinding:    check.IdentityBinding,
+		ApprovedScope:      approvedScope,
+		SessionToolCalls:   sessionToolCalls,
+		ToolArgs:           check.ToolArgs,
+		EnforcementMode:    check.EnforcementMode,
+		Environment:        check.Environment,
+		TraceID:            check.EnforcementTraceID,
+		OccurredAt:         time.Now().UTC(),
+		SessionIntent:      check.SessionIntent,
+		Purpose:            check.Purpose,
+		DataClassification: check.DataClassification,
+		TaskContext:        check.TaskContext,
 	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {

@@ -34,14 +34,20 @@
 //	THOTH_API_URL    — unified tenant API base URL override (enforcement + events)
 //	THOTH_ENV        — environment scope (default: prod)
 //	THOTH_ENVIRONMENT — alternate environment scope key (default: prod)
+//	THOTH_ENFORCEMENT_MODE — enforcement mode override (default: block)
+//	THOTH_ENFORCEMENT — legacy alias for enforcement mode override
 //	THOTH_ENFORCEMENT_TRACE_ID — explicit cross-service trace ID override
 //	THOTH_USER_ID    — user identifier for policy evaluation
 //	THOTH_APPROVED_SCOPE — comma-delimited approved tool names
 //	THOTH_SESSION_INTENT — HIPAA minimum-necessary session intent
+//	THOTH_PURPOSE — default purpose context for tool calls
+//	THOTH_DATA_CLASSIFICATION — default data classification context
+//	THOTH_TASK_CONTEXT_JSON — JSON object with initiated_by/task_id/chain
 //	THOTH_LOG_LEVEL — optional SDK decision-log level override (falls back to LOG_LEVEL)
 package thoth
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -101,6 +107,20 @@ type Config struct {
 	// Env fallback: THOTH_SESSION_INTENT.
 	SessionIntent string
 
+	// Purpose declares the default purpose context for calls emitted by this SDK.
+	// Env fallback: THOTH_PURPOSE.
+	Purpose string
+
+	// DataClassification declares the default data sensitivity label sent with
+	// enforcement requests and telemetry.
+	// Env fallback: THOTH_DATA_CLASSIFICATION.
+	DataClassification string
+
+	// TaskContext is optional governance attribution context. Expected keys:
+	// initiated_by, task_id, chain.
+	// Env fallback: THOTH_TASK_CONTEXT_JSON.
+	TaskContext map[string]any
+
 	// EnforcementTraceID sets an explicit trace correlation ID for enforcement
 	// requests. When empty, session ID is used.
 	// Env fallback: THOTH_ENFORCEMENT_TRACE_ID.
@@ -110,7 +130,7 @@ type Config struct {
 	Timeout time.Duration
 
 	// Enforcement controls how policy violations are handled.
-	// Default: "progressive".
+	// Default: "block".
 	Enforcement string
 }
 
@@ -154,8 +174,23 @@ func applyEnvFallbacks(cfg Config) Config {
 	if cfg.SessionIntent == "" {
 		cfg.SessionIntent = os.Getenv("THOTH_SESSION_INTENT")
 	}
+	if cfg.Purpose == "" {
+		cfg.Purpose = strings.TrimSpace(os.Getenv("THOTH_PURPOSE"))
+	}
+	if cfg.DataClassification == "" {
+		cfg.DataClassification = strings.TrimSpace(os.Getenv("THOTH_DATA_CLASSIFICATION"))
+	}
+	if len(cfg.TaskContext) == 0 {
+		cfg.TaskContext = parseTaskContextJSON(os.Getenv("THOTH_TASK_CONTEXT_JSON"))
+	}
 	if cfg.EnforcementTraceID == "" {
 		cfg.EnforcementTraceID = os.Getenv("THOTH_ENFORCEMENT_TRACE_ID")
+	}
+	if cfg.Enforcement == "" {
+		cfg.Enforcement = os.Getenv("THOTH_ENFORCEMENT_MODE")
+		if cfg.Enforcement == "" {
+			cfg.Enforcement = os.Getenv("THOTH_ENFORCEMENT")
+		}
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
@@ -177,10 +212,13 @@ func toInternalConfig(cfg Config) ithoth.Config {
 		IdentityBinding:    cfg.IdentityBinding,
 		ApprovedScope:      cfg.ApprovedScope,
 		SessionIntent:      cfg.SessionIntent,
+		Purpose:            cfg.Purpose,
+		DataClassification: cfg.DataClassification,
+		TaskContext:        cfg.TaskContext,
 		EnforcementTraceID: cfg.EnforcementTraceID,
 	}
 	if cfg.Enforcement != "" {
-		internal.Enforcement = ithoth.EnforcementMode(cfg.Enforcement)
+		internal.Enforcement = ithoth.EnforcementMode(strings.ToLower(strings.TrimSpace(cfg.Enforcement)))
 	}
 	return ithoth.ApplyConfigDefaults(internal)
 }
@@ -219,18 +257,24 @@ func NewClient(cfg Config) (*Client, error) {
 		traceID = sess.SessionID
 	}
 	startEvent := ithoth.NewBehavioralEvent(ithoth.BehavioralEventInput{
-		AgentID:          internalCfg.AgentID,
-		TenantID:         internalCfg.TenantID,
-		SessionID:        sess.SessionID,
-		UserID:           internalCfg.UserID,
-		SourceType:       ithoth.SourceAgentLLM,
-		EventType:        ithoth.EventLLMInvocation,
-		ToolName:         "go_sdk",
-		Content:          fmt.Sprintf("go_sdk_session_start enforcement=%s", internalCfg.Enforcement),
-		Metadata:         map[string]any{"enforcement_trace_id": traceID, "environment": internalCfg.Environment},
-		ApprovedScope:    append([]string{}, internalCfg.ApprovedScope...),
-		EnforcementMode:  internalCfg.Enforcement,
-		SessionToolCalls: []string{},
+		AgentID:            internalCfg.AgentID,
+		TenantID:           internalCfg.TenantID,
+		SessionID:          sess.SessionID,
+		UserID:             internalCfg.UserID,
+		Purpose:            internalCfg.Purpose,
+		DataClassification: internalCfg.DataClassification,
+		TaskContext:        cloneAnyMap(internalCfg.TaskContext),
+		InitiatedBy:        firstNonEmptyString(internalCfg.TaskContext, "initiated_by", "initiatedBy"),
+		TaskID:             firstNonEmptyString(internalCfg.TaskContext, "task_id", "taskId"),
+		DelegationChain:    stringSliceFromMap(internalCfg.TaskContext, "chain"),
+		SourceType:         ithoth.SourceAgentLLM,
+		EventType:          ithoth.EventLLMInvocation,
+		ToolName:           "go_sdk",
+		Content:            fmt.Sprintf("go_sdk_session_start enforcement=%s", internalCfg.Enforcement),
+		Metadata:           map[string]any{"enforcement_trace_id": traceID, "environment": internalCfg.Environment},
+		ApprovedScope:      append([]string{}, internalCfg.ApprovedScope...),
+		EnforcementMode:    internalCfg.Enforcement,
+		SessionToolCalls:   []string{},
 	})
 	emitter.Emit(&startEvent)
 
@@ -243,5 +287,72 @@ func NewClient(cfg Config) (*Client, error) {
 func (c *Client) Close() {
 	if c.emitter != nil {
 		c.emitter.Close()
+	}
+}
+
+func parseTaskContextJSON(raw string) map[string]any {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil
+	}
+	if len(parsed) == 0 {
+		return nil
+	}
+	return parsed
+}
+
+func firstNonEmptyString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func stringSliceFromMap(values map[string]any, key string) []string {
+	raw, ok := values[key]
+	if !ok {
+		return nil
+	}
+	switch typed := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := strings.TrimSpace(fmt.Sprintf("%v", item))
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
 	}
 }

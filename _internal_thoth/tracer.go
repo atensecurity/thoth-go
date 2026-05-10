@@ -104,7 +104,10 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 				t.cfg.EnforcementTraceID,
 				t.session.SessionID,
 			),
-			SessionIntent: t.cfg.SessionIntent,
+			SessionIntent:      t.cfg.SessionIntent,
+			Purpose:            t.cfg.Purpose,
+			DataClassification: t.cfg.DataClassification,
+			TaskContext:        cloneMap(t.cfg.TaskContext),
 		}
 		baseMetadata := t.baseToolMetadata(
 			name,
@@ -478,7 +481,7 @@ func (t *Tracer) baseToolMetadata(
 	enforcementTraceID string,
 	environment string,
 ) map[string]any {
-	return map[string]any{
+	metadata := map[string]any{
 		"sdk_language":         "go",
 		"environment":          environment,
 		"enforcement_trace_id": enforcementTraceID,
@@ -488,6 +491,18 @@ func (t *Tracer) baseToolMetadata(
 		},
 		"tool_args": toolArgs,
 	}
+	if strings.TrimSpace(t.cfg.Purpose) != "" {
+		metadata["purpose"] = strings.TrimSpace(t.cfg.Purpose)
+		metadata["purpose_context"] = strings.TrimSpace(t.cfg.Purpose)
+	}
+	if strings.TrimSpace(t.cfg.DataClassification) != "" {
+		metadata["data_classification"] = strings.TrimSpace(t.cfg.DataClassification)
+	}
+	if len(t.cfg.TaskContext) > 0 {
+		metadata["task_context"] = cloneMap(t.cfg.TaskContext)
+		metadata["delegation_context"] = cloneMap(t.cfg.TaskContext)
+	}
+	return metadata
 }
 
 func decisionMetadata(decision *EnforcementDecision) map[string]any {
@@ -584,19 +599,78 @@ func (t *Tracer) emitLifecycleEvent(
 		metadata = map[string]any{}
 	}
 	ev := NewBehavioralEvent(BehavioralEventInput{
-		AgentID:          t.cfg.AgentID,
-		TenantID:         t.cfg.TenantID,
-		SessionID:        t.session.SessionID,
-		UserID:           t.cfg.UserID,
-		SourceType:       SourceAgentToolCall,
-		EventType:        eventType,
-		ToolName:         toolName,
-		Content:          content,
-		Metadata:         metadata,
-		ApprovedScope:    append([]string{}, t.cfg.ApprovedScope...),
-		EnforcementMode:  t.cfg.Enforcement,
-		SessionToolCalls: append([]string{}, sessionToolCalls...),
-		ViolationID:      violationID,
+		AgentID:            t.cfg.AgentID,
+		TenantID:           t.cfg.TenantID,
+		SessionID:          t.session.SessionID,
+		UserID:             t.cfg.UserID,
+		Purpose:            strings.TrimSpace(t.cfg.Purpose),
+		DataClassification: strings.TrimSpace(t.cfg.DataClassification),
+		TaskContext:        cloneMap(t.cfg.TaskContext),
+		InitiatedBy:        strings.TrimSpace(coalesceNonEmpty(stringFromMap(t.cfg.TaskContext, "initiated_by"), stringFromMap(t.cfg.TaskContext, "initiatedBy"))),
+		TaskID:             strings.TrimSpace(coalesceNonEmpty(stringFromMap(t.cfg.TaskContext, "task_id"), stringFromMap(t.cfg.TaskContext, "taskId"))),
+		DelegationChain:    normalizedChain(t.cfg.TaskContext),
+		SourceType:         SourceAgentToolCall,
+		EventType:          eventType,
+		ToolName:           toolName,
+		Content:            content,
+		Metadata:           metadata,
+		ApprovedScope:      append([]string{}, t.cfg.ApprovedScope...),
+		EnforcementMode:    t.cfg.Enforcement,
+		SessionToolCalls:   append([]string{}, sessionToolCalls...),
+		ViolationID:        violationID,
 	})
 	t.emitter.Emit(&ev)
+}
+
+func stringFromMap(values map[string]any, key string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	value, ok := values[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func normalizedChain(values map[string]any) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	raw, ok := values["chain"]
+	if !ok {
+		return nil
+	}
+	list, ok := raw.([]any)
+	if ok {
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			text := strings.TrimSpace(fmt.Sprintf("%v", item))
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	}
+	if typed, ok := raw.([]string); ok {
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := strings.TrimSpace(item)
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	}
+	return nil
 }

@@ -159,8 +159,8 @@ func TestThothConfigDefaults(t *testing.T) {
 	if cfg.EnforcerURL != "http://enforcer:8080" {
 		t.Errorf("EnforcerURL = %q, want default", cfg.EnforcerURL)
 	}
-	if cfg.Enforcement != thoth.Progressive {
-		t.Errorf("Enforcement = %q, want Progressive", cfg.Enforcement)
+	if cfg.Enforcement != thoth.Block {
+		t.Errorf("Enforcement = %q, want Block", cfg.Enforcement)
 	}
 }
 

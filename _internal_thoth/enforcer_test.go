@@ -46,16 +46,19 @@ func loadGoldenDecisionFixture(t *testing.T, name string) map[string]any {
 }
 
 type captureEnforceRequest struct {
-	ToolName         string         `json:"tool_name"`
-	SessionID        string         `json:"session_id"`
-	UserID           string         `json:"user_id"`
-	IdentityBinding  map[string]any `json:"identity_binding"`
-	ApprovedScope    []string       `json:"approved_scope"`
-	SessionToolCalls []string       `json:"session_tool_calls"`
-	ToolArgs         map[string]any `json:"tool_args"`
-	SessionIntent    string         `json:"session_intent"`
-	Environment      string         `json:"environment"`
-	TraceID          string         `json:"enforcement_trace_id"`
+	ToolName           string         `json:"tool_name"`
+	SessionID          string         `json:"session_id"`
+	UserID             string         `json:"user_id"`
+	IdentityBinding    map[string]any `json:"identity_binding"`
+	ApprovedScope      []string       `json:"approved_scope"`
+	SessionToolCalls   []string       `json:"session_tool_calls"`
+	ToolArgs           map[string]any `json:"tool_args"`
+	SessionIntent      string         `json:"session_intent"`
+	Purpose            string         `json:"purpose"`
+	DataClassification string         `json:"data_classification"`
+	TaskContext        map[string]any `json:"task_context"`
+	Environment        string         `json:"environment"`
+	TraceID            string         `json:"enforcement_trace_id"`
 }
 
 func makeEnforcerServer(t *testing.T, decision thoth.DecisionType, reason string, statusCode int) *httptest.Server {
@@ -314,14 +317,21 @@ func TestEnforcerClient_PropagatesUserScopeAndSessionIntent(t *testing.T) {
 
 	client := thoth.NewEnforcerClient(srv.URL, "")
 	_, err := client.Check(context.Background(), thoth.CheckRequest{
-		ToolName:         "read_file",
-		SessionID:        "sess-user",
-		UserID:           "user-123",
-		ApprovedScope:    []string{"read_file", "search_docs"},
-		SessionToolCalls: []string{"search_docs"},
-		SessionIntent:    "investigation",
-		EnforcementMode:  thoth.Block,
-		Environment:      "prod",
+		ToolName:           "read_file",
+		SessionID:          "sess-user",
+		UserID:             "user-123",
+		ApprovedScope:      []string{"read_file", "search_docs"},
+		SessionToolCalls:   []string{"search_docs"},
+		SessionIntent:      "investigation",
+		Purpose:            "customer-facing",
+		DataClassification: "internal",
+		TaskContext: map[string]any{
+			"initiated_by": "human:security-lead@example.com",
+			"task_id":      "T-500",
+			"chain":        []any{"orchestrator-agent", "security-analyst-agent"},
+		},
+		EnforcementMode: thoth.Block,
+		Environment:     "prod",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -335,6 +345,15 @@ func TestEnforcerClient_PropagatesUserScopeAndSessionIntent(t *testing.T) {
 	}
 	if got.SessionIntent != "investigation" {
 		t.Fatalf("session_intent = %q, want %q", got.SessionIntent, "investigation")
+	}
+	if got.Purpose != "customer-facing" {
+		t.Fatalf("purpose = %q, want %q", got.Purpose, "customer-facing")
+	}
+	if got.DataClassification != "internal" {
+		t.Fatalf("data_classification = %q, want %q", got.DataClassification, "internal")
+	}
+	if got.TaskContext["task_id"] != "T-500" {
+		t.Fatalf("task_context.task_id = %v, want %q", got.TaskContext["task_id"], "T-500")
 	}
 }
 

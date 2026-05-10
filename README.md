@@ -26,6 +26,7 @@ export THOTH_USER_ID="user-123"
 export THOTH_APPROVED_SCOPE="read_file,search_docs"
 export THOTH_SESSION_INTENT="triage"
 export THOTH_EVENT_INGEST_TOKEN="ingest-token-optional"
+export THOTH_ENFORCEMENT_MODE="block" # optional override; default is block (deny)
 export THOTH_LOG_LEVEL="DEBUG" # optional; falls back to LOG_LEVEL when unset
 ```
 

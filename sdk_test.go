@@ -86,6 +86,7 @@ type capturedEnforceRequest struct {
 	SessionIntent      string         `json:"session_intent"`
 	ToolArgs           map[string]any `json:"tool_args"`
 	Environment        string         `json:"environment"`
+	EnforcementMode    string         `json:"enforcement_mode"`
 	EnforcementTraceID string         `json:"enforcement_trace_id"`
 }
 
@@ -170,6 +171,48 @@ func TestNewClientFromEnv_UsesTHOTHENVIRONMENTFallback(t *testing.T) {
 	}
 	if got.Environment != "dev" {
 		t.Fatalf("environment = %q, want %q", got.Environment, "dev")
+	}
+	if got.EnforcementMode != "block" {
+		t.Fatalf("enforcement_mode = %q, want %q", got.EnforcementMode, "block")
+	}
+}
+
+func TestNewClientFromEnv_UsesTHOTHEnforcementModeFallback(t *testing.T) {
+	var got capturedEnforceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != enforcePath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "ALLOW"})
+	}))
+	defer srv.Close()
+
+	t.Setenv("THOTH_API_KEY", "env-api-key")
+	t.Setenv("THOTH_TENANT_ID", "env-tenant")
+	t.Setenv("THOTH_AGENT_ID", "env-agent")
+	t.Setenv("THOTH_API_URL", srv.URL)
+	t.Setenv("THOTH_ENFORCEMENT_MODE", "step_up")
+
+	client, err := sdk.NewClient(sdk.Config{})
+	if err != nil {
+		t.Fatalf("NewClient from env fallback: %v", err)
+	}
+	defer client.Close()
+
+	tool := client.WrapTool("echo", func(_ context.Context, input string) (string, error) {
+		return input, nil
+	})
+	_, err = tool(context.Background(), testHello)
+	if err != nil {
+		t.Fatalf("WrapTool with env fallback: unexpected error: %v", err)
+	}
+	if got.EnforcementMode != "step_up" {
+		t.Fatalf("enforcement_mode = %q, want %q", got.EnforcementMode, "step_up")
 	}
 }
 

@@ -67,40 +67,52 @@ const ttlDays = 90
 // BehavioralEventInput is the canonical SDK payload for behavioral telemetry.
 // It matches the enforcer/eventingestor contract and avoids legacy-only fields.
 type BehavioralEventInput struct {
-	AgentID          string
-	TenantID         string
-	SessionID        string
-	UserID           string
-	SourceType       SourceType
-	EventType        EventType
-	ToolName         string
-	Content          string
-	Metadata         map[string]any
-	ApprovedScope    []string
-	EnforcementMode  EnforcementMode
-	SessionToolCalls []string
-	OccurredAt       time.Time
-	ViolationID      string
+	AgentID            string
+	TenantID           string
+	SessionID          string
+	UserID             string
+	Purpose            string
+	DataClassification string
+	TaskContext        map[string]any
+	InitiatedBy        string
+	TaskID             string
+	DelegationChain    []string
+	SourceType         SourceType
+	EventType          EventType
+	ToolName           string
+	Content            string
+	Metadata           map[string]any
+	ApprovedScope      []string
+	EnforcementMode    EnforcementMode
+	SessionToolCalls   []string
+	OccurredAt         time.Time
+	ViolationID        string
 }
 
 // BehavioralEvent represents a single observable action by the agent.
 type BehavioralEvent struct {
-	EventID          string          `json:"event_id"`
-	TenantID         string          `json:"tenant_id"`
-	AgentID          string          `json:"agent_id,omitempty"`
-	SessionID        string          `json:"session_id"`
-	UserID           string          `json:"user_id"`
-	SourceType       SourceType      `json:"source_type"`
-	EventType        EventType       `json:"event_type"`
-	ToolName         string          `json:"tool_name,omitempty"`
-	Content          string          `json:"content"`
-	Metadata         map[string]any  `json:"metadata"`
-	ApprovedScope    []string        `json:"approved_scope"`
-	EnforcementMode  EnforcementMode `json:"enforcement_mode"`
-	SessionToolCalls []string        `json:"session_tool_calls"`
-	OccurredAt       time.Time       `json:"occurred_at"`
-	TTL              int64           `json:"ttl"`
-	ViolationID      string          `json:"violation_id,omitempty"`
+	EventID            string          `json:"event_id"`
+	TenantID           string          `json:"tenant_id"`
+	AgentID            string          `json:"agent_id,omitempty"`
+	SessionID          string          `json:"session_id"`
+	UserID             string          `json:"user_id"`
+	Purpose            string          `json:"purpose,omitempty"`
+	DataClassification string          `json:"data_classification,omitempty"`
+	TaskContext        map[string]any  `json:"task_context,omitempty"`
+	InitiatedBy        string          `json:"initiated_by,omitempty"`
+	TaskID             string          `json:"task_id,omitempty"`
+	DelegationChain    []string        `json:"delegation_chain,omitempty"`
+	SourceType         SourceType      `json:"source_type"`
+	EventType          EventType       `json:"event_type"`
+	ToolName           string          `json:"tool_name,omitempty"`
+	Content            string          `json:"content"`
+	Metadata           map[string]any  `json:"metadata"`
+	ApprovedScope      []string        `json:"approved_scope"`
+	EnforcementMode    EnforcementMode `json:"enforcement_mode"`
+	SessionToolCalls   []string        `json:"session_tool_calls"`
+	OccurredAt         time.Time       `json:"occurred_at"`
+	TTL                int64           `json:"ttl"`
+	ViolationID        string          `json:"violation_id,omitempty"`
 }
 
 // NewBehavioralEvent constructs a BehavioralEvent with a generated ID, current timestamp,
@@ -122,23 +134,35 @@ func NewBehavioralEvent(input BehavioralEventInput) BehavioralEvent {
 	if input.SessionToolCalls == nil {
 		input.SessionToolCalls = []string{}
 	}
+	if input.TaskContext == nil {
+		input.TaskContext = map[string]any{}
+	}
+	if input.DelegationChain == nil {
+		input.DelegationChain = []string{}
+	}
 	return BehavioralEvent{
-		EventID:          tenantScopedEventID(input.TenantID),
-		TenantID:         input.TenantID,
-		AgentID:          input.AgentID,
-		SessionID:        input.SessionID,
-		UserID:           input.UserID,
-		SourceType:       input.SourceType,
-		EventType:        input.EventType,
-		ToolName:         input.ToolName,
-		Content:          ensureContent(input.Content, input.EventType),
-		Metadata:         input.Metadata,
-		ApprovedScope:    input.ApprovedScope,
-		EnforcementMode:  input.EnforcementMode,
-		SessionToolCalls: input.SessionToolCalls,
-		OccurredAt:       occurredAt,
-		TTL:              occurredAt.Add(ttlDays * 24 * time.Hour).Unix(),
-		ViolationID:      input.ViolationID,
+		EventID:            tenantScopedEventID(input.TenantID),
+		TenantID:           input.TenantID,
+		AgentID:            input.AgentID,
+		SessionID:          input.SessionID,
+		UserID:             input.UserID,
+		Purpose:            input.Purpose,
+		DataClassification: input.DataClassification,
+		TaskContext:        input.TaskContext,
+		InitiatedBy:        input.InitiatedBy,
+		TaskID:             input.TaskID,
+		DelegationChain:    input.DelegationChain,
+		SourceType:         input.SourceType,
+		EventType:          input.EventType,
+		ToolName:           input.ToolName,
+		Content:            ensureContent(input.Content, input.EventType),
+		Metadata:           input.Metadata,
+		ApprovedScope:      input.ApprovedScope,
+		EnforcementMode:    input.EnforcementMode,
+		SessionToolCalls:   input.SessionToolCalls,
+		OccurredAt:         occurredAt,
+		TTL:                occurredAt.Add(ttlDays * 24 * time.Hour).Unix(),
+		ViolationID:        input.ViolationID,
 	}
 }
 
@@ -212,6 +236,13 @@ type CheckRequest struct {
 	// enforcement. When a compliance pack defines session_scopes, tools outside the
 	// declared intent scope are step-up-challenged. Empty string means no intent check.
 	SessionIntent string
+	// Purpose declares the tool call purpose context (e.g. customer-facing).
+	Purpose string
+	// DataClassification is the classification label of requested data for
+	// purpose/sensitivity enforcement.
+	DataClassification string
+	// TaskContext carries initiated_by/task_id/chain attribution.
+	TaskContext map[string]any
 }
 
 // Emitter is the interface for behavioral event emission backends.
@@ -255,6 +286,12 @@ type Config struct {
 	// SessionIntent declares the purpose of this session for HIPAA minimum-necessary
 	// enforcement. Passed on every enforce call. Empty string means no intent check.
 	SessionIntent string
+	// Purpose declares the default purpose context for calls from this tracer.
+	Purpose string
+	// DataClassification provides an optional default classification context.
+	DataClassification string
+	// TaskContext includes initiated_by/task_id/chain attribution metadata.
+	TaskContext map[string]any
 }
 
 // ApplyConfigDefaults fills in zero-value fields with sensible defaults.
@@ -267,13 +304,16 @@ func ApplyConfigDefaults(cfg Config) Config {
 		}
 	}
 	if cfg.Enforcement == "" {
-		cfg.Enforcement = Progressive
+		cfg.Enforcement = Block
 	}
 	if cfg.Environment == "" {
 		cfg.Environment = "prod"
 	}
 	if cfg.ApprovedScope == nil {
 		cfg.ApprovedScope = []string{}
+	}
+	if cfg.TaskContext == nil {
+		cfg.TaskContext = map[string]any{}
 	}
 	return cfg
 }
