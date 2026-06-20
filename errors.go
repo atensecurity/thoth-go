@@ -45,6 +45,18 @@ type PolicyViolationError struct {
 	ModelSignals []string
 	// Receipt is the decision receipt payload when available.
 	Receipt map[string]any
+	// DecisionEnvelopeVersion is the schema version of the decision envelope.
+	DecisionEnvelopeVersion string
+	// EnforcementTraceID is the trace correlation ID returned by the enforcer.
+	EnforcementTraceID string
+	// FastMLFeatures holds the ONNX fast-ML feature vector used for scoring.
+	FastMLFeatures map[string]float64
+	// ScoreComponents breaks down the composite risk score by component.
+	ScoreComponents map[string]any
+	// TopContributors lists the highest-weight features that drove the decision.
+	TopContributors []map[string]any
+	// DecisionEvidence contains raw evidence fields from the enforcer decision.
+	DecisionEvidence map[string]any
 }
 
 // Error implements the error interface.

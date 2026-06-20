@@ -38,17 +38,19 @@ type enforcerRequest struct {
 
 // EnforcerClient calls the Thoth enforcement service to obtain a pre-execution decision.
 type EnforcerClient struct {
-	baseURL string
-	apiKey  string
-	http    *http.Client
+	baseURL  string
+	apiKey   string
+	failOpen bool
+	http     *http.Client
 }
 
 // NewEnforcerClient creates an EnforcerClient with a 5-second HTTP timeout.
-func NewEnforcerClient(baseURL, apiKey string) *EnforcerClient {
+func NewEnforcerClient(baseURL, apiKey string, failOpen bool) *EnforcerClient {
 	return &EnforcerClient{
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		http:    &http.Client{Timeout: defaultEnforcerTimeout},
+		baseURL:  baseURL,
+		apiKey:   apiKey,
+		failOpen: failOpen,
+		http:     &http.Client{Timeout: defaultEnforcerTimeout},
 	}
 }
 
@@ -60,6 +62,11 @@ func (c *EnforcerClient) Timeout() time.Duration {
 var fallbackDecision = EnforcementDecision{
 	Decision: DecisionBlock,
 	Reason:   "enforcer unavailable",
+}
+
+var failOpenDecision = EnforcementDecision{
+	Decision: DecisionAllow,
+	Reason:   "enforcer unavailable (fail-open)",
 }
 
 // Check sends a CheckRequest to the enforcer and returns its decision.
@@ -109,12 +116,26 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		if c.failOpen {
+			log.Printf("thoth: WARN: enforcer unreachable, fail-open fallback to ALLOW: %v", err)
+			return failOpenDecision, nil
+		}
 		log.Printf("thoth: ERROR: enforcer unreachable, fail-closed fallback to BLOCK: %v", err)
 		return fallbackDecision, fmt.Errorf("thoth: enforcer request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if c.failOpen && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError) {
+			log.Printf(
+				"thoth: WARN: enforcer returned retryable status %d, fail-open fallback to ALLOW",
+				resp.StatusCode,
+			)
+			return EnforcementDecision{
+				Decision: DecisionAllow,
+				Reason:   fmt.Sprintf("enforcer unavailable (status=%d, fail-open)", resp.StatusCode),
+			}, nil
+		}
 		err = fmt.Errorf("thoth: enforcer returned HTTP %d", resp.StatusCode)
 		log.Printf("thoth: ERROR: %v, fail-closed fallback to BLOCK", err)
 		return fallbackDecision, err
@@ -122,6 +143,10 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 
 	var dec EnforcementDecision
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&dec); decodeErr != nil {
+		if c.failOpen {
+			log.Printf("thoth: WARN: enforcer decode failed, fail-open fallback to ALLOW: %v", decodeErr)
+			return failOpenDecision, nil
+		}
 		err = fmt.Errorf("thoth: enforcer decode: %w", decodeErr)
 		log.Printf("thoth: ERROR: %v, fail-closed fallback to BLOCK", err)
 		return fallbackDecision, err

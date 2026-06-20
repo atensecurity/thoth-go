@@ -580,6 +580,39 @@ func TestWrapToolEnforcerDown(t *testing.T) {
 	}
 }
 
+func TestWrapToolEnforcerDownFailOpen(t *testing.T) {
+	client, err := sdk.NewClient(sdk.Config{
+		APIURL:      "http://127.0.0.1:19999", // nothing listening here
+		APIKey:      "test-key",
+		TenantID:    "test-tenant",
+		AgentID:     "test-agent",
+		Timeout:     200 * time.Millisecond,
+		FailOpen:    true,
+		Enforcement: "block",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	called := false
+	resilient := client.WrapTool("resilient_tool", func(_ context.Context, input string) (string, error) {
+		called = true
+		return "ok:" + input, nil
+	})
+
+	result, err := resilient(context.Background(), "ping")
+	if err != nil {
+		t.Fatalf("WrapTool(enforcer down fail-open): unexpected error: %v", err)
+	}
+	if result != "ok:ping" {
+		t.Fatalf("WrapTool(enforcer down fail-open): got %q, want %q", result, "ok:ping")
+	}
+	if !called {
+		t.Error("WrapTool(enforcer down fail-open): tool should execute in fail-open mode")
+	}
+}
+
 // TestWrapToolUsesUnifiedAPIURL verifies that enforcement calls are sent to APIURL.
 func TestWrapToolUsesUnifiedAPIURL(t *testing.T) {
 	var enforceHits int32

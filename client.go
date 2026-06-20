@@ -2,9 +2,9 @@
 // with governance, policy enforcement, and behavioral monitoring.
 //
 // Thoth wraps your agent's tool functions with pre-execution policy checks
-// (enforcer) and asynchronous behavioral event emission (HTTP). Enforcement
-// is fail-closed: if the enforcer is unreachable, your tool call is blocked
-// and a policy violation is returned.
+// (enforcer) and asynchronous behavioral event emission (HTTP). Enforcement is
+// fail-closed by default; set FailOpen (or THOTH_FAIL_OPEN=true) to allow tool
+// execution when enforcement infrastructure is unavailable.
 //
 // Quick start:
 //
@@ -44,6 +44,7 @@
 //	THOTH_DATA_CLASSIFICATION — default data classification context
 //	THOTH_TASK_CONTEXT_JSON — JSON object with initiated_by/task_id/chain
 //	THOTH_LOG_LEVEL — optional SDK decision-log level override (falls back to LOG_LEVEL)
+//	THOTH_FAIL_OPEN — when true, enforcer transport/5xx/429 failures allow tool execution
 package thoth
 
 import (
@@ -52,6 +53,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -132,6 +134,11 @@ type Config struct {
 	// Enforcement controls how policy violations are handled.
 	// Default: "block".
 	Enforcement string
+
+	// FailOpen allows tool execution when enforcement infrastructure is
+	// unavailable (network error, 429, or 5xx). Auth failures still block.
+	// Env fallback: THOTH_FAIL_OPEN.
+	FailOpen bool
 }
 
 func applyEnvFallbacks(cfg Config) Config {
@@ -192,6 +199,14 @@ func applyEnvFallbacks(cfg Config) Config {
 			cfg.Enforcement = os.Getenv("THOTH_ENFORCEMENT")
 		}
 	}
+	if !cfg.FailOpen {
+		if raw := strings.TrimSpace(os.Getenv("THOTH_FAIL_OPEN")); raw != "" {
+			parsed, err := strconv.ParseBool(raw)
+			if err == nil {
+				cfg.FailOpen = parsed
+			}
+		}
+	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
 	}
@@ -215,6 +230,7 @@ func toInternalConfig(cfg Config) ithoth.Config {
 		Purpose:            cfg.Purpose,
 		DataClassification: cfg.DataClassification,
 		TaskContext:        cfg.TaskContext,
+		FailOpen:           cfg.FailOpen,
 		EnforcementTraceID: cfg.EnforcementTraceID,
 	}
 	if cfg.Enforcement != "" {

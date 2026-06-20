@@ -35,7 +35,7 @@ func NewTracer(cfg Config, session *SessionContext, emitter Emitter) *Tracer {
 		cfg:           cfg,
 		session:       session,
 		emitter:       emitter,
-		enforcer:      NewEnforcerClient(cfg.EnforcerURL, cfg.APIKey),
+		enforcer:      NewEnforcerClient(cfg.EnforcerURL, cfg.APIKey, cfg.FailOpen),
 		stepUp:        NewStepUpClient(cfg.EnforcerURL, cfg.APIKey, 0),
 		stepUpTimeout: defaultStepUpTimeout,
 		tools:         make(map[string]ToolFunc),
@@ -262,6 +262,28 @@ func cloneMap(values map[string]any) map[string]any {
 	return out
 }
 
+func cloneFloat64Map(values map[string]float64) map[string]float64 {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneMapSlice(values []map[string]any) []map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, len(values))
+	for i, item := range values {
+		out[i] = cloneMap(item)
+	}
+	return out
+}
+
 func mergeDecisionContext(primary, fallback EnforcementDecision) EnforcementDecision {
 	merged := primary
 	merged.ViolationID = coalesceNonEmpty(merged.ViolationID, fallback.ViolationID)
@@ -303,25 +325,31 @@ func mergeDecisionContext(primary, fallback EnforcementDecision) EnforcementDeci
 func policyViolationFromDecision(toolName, reason string, decision EnforcementDecision) *PolicyViolationError {
 	authDecision := coalesceNonEmpty(decision.AuthorizationDecision, string(decision.Decision))
 	return &PolicyViolationError{
-		ToolName:              toolName,
-		Reason:                reason,
-		ViolationID:           decision.ViolationID,
-		DecisionReasonCode:    decision.DecisionReasonCode,
-		ActionClassification:  decision.ActionClassification,
-		AuthorizationDecision: authDecision,
-		DeferTimeoutSeconds:   decision.DeferTimeoutSeconds,
-		StepUpTimeoutSeconds:  decision.StepUpTimeoutSeconds,
-		RiskScore:             decision.RiskScore,
-		LatencyMs:             decision.LatencyMs,
-		PackID:                decision.PackID,
-		PackVersion:           decision.PackVersion,
-		RuleVersion:           decision.RuleVersion,
-		RegulatoryRegimes:     cloneStringSlice(decision.RegulatoryRegimes),
-		MatchedRuleIDs:        cloneStringSlice(decision.MatchedRuleIDs),
-		MatchedControlIDs:     cloneStringSlice(decision.MatchedControlIDs),
-		PolicyReferences:      cloneStringSlice(decision.PolicyReferences),
-		ModelSignals:          cloneStringSlice(decision.ModelSignals),
-		Receipt:               cloneMap(decision.Receipt),
+		ToolName:                toolName,
+		Reason:                  reason,
+		ViolationID:             decision.ViolationID,
+		DecisionReasonCode:      decision.DecisionReasonCode,
+		ActionClassification:    decision.ActionClassification,
+		AuthorizationDecision:   authDecision,
+		DeferTimeoutSeconds:     decision.DeferTimeoutSeconds,
+		StepUpTimeoutSeconds:    decision.StepUpTimeoutSeconds,
+		RiskScore:               decision.RiskScore,
+		LatencyMs:               decision.LatencyMs,
+		PackID:                  decision.PackID,
+		PackVersion:             decision.PackVersion,
+		RuleVersion:             decision.RuleVersion,
+		RegulatoryRegimes:       cloneStringSlice(decision.RegulatoryRegimes),
+		MatchedRuleIDs:          cloneStringSlice(decision.MatchedRuleIDs),
+		MatchedControlIDs:       cloneStringSlice(decision.MatchedControlIDs),
+		PolicyReferences:        cloneStringSlice(decision.PolicyReferences),
+		ModelSignals:            cloneStringSlice(decision.ModelSignals),
+		Receipt:                 cloneMap(decision.Receipt),
+		DecisionEnvelopeVersion: decision.DecisionEnvelopeVersion,
+		EnforcementTraceID:      decision.EnforcementTraceID,
+		FastMLFeatures:          cloneFloat64Map(decision.FastMLFeatures),
+		ScoreComponents:         cloneMap(decision.ScoreComponents),
+		TopContributors:         cloneMapSlice(decision.TopContributors),
+		DecisionEvidence:        cloneMap(decision.DecisionEvidence),
 	}
 }
 

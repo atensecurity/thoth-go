@@ -79,7 +79,7 @@ func TestEnforcerClient_CheckReturnsAllow(t *testing.T) {
 	srv := makeEnforcerServer(t, thoth.DecisionAllow, "", http.StatusOK)
 	defer srv.Close()
 
-	client := thoth.NewEnforcerClient(srv.URL, "")
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	dec, err := client.Check(context.Background(), thoth.CheckRequest{
 		ToolName: "read_file", SessionID: "sess-1", SessionToolCalls: []string{"read_file"},
 	})
@@ -97,7 +97,7 @@ func TestEnforcerClient_CheckReturnsBlock(t *testing.T) {
 	srv := makeEnforcerServer(t, thoth.DecisionBlock, "out of scope", http.StatusOK)
 	defer srv.Close()
 
-	client := thoth.NewEnforcerClient(srv.URL, "")
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	dec, err := client.Check(context.Background(), thoth.CheckRequest{
 		ToolName: "delete_db", SessionID: "sess-1", SessionToolCalls: []string{"read_file"},
 	})
@@ -122,7 +122,7 @@ func TestEnforcerClient_DecodesDecisionMetadataFields(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := thoth.NewEnforcerClient(srv.URL, "")
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	dec, err := client.Check(context.Background(), thoth.CheckRequest{
 		ToolName: "write_file", SessionID: "sess-meta",
 	})
@@ -159,7 +159,7 @@ func TestEnforcerClient_NetworkErrorFallsBackToBlock(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	srv.Close()
 
-	client := thoth.NewEnforcerClient(srv.URL, "")
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	dec, err := client.Check(context.Background(), thoth.CheckRequest{ToolName: "any_tool", SessionID: "sess-1"})
 
 	if err == nil {
@@ -170,12 +170,28 @@ func TestEnforcerClient_NetworkErrorFallsBackToBlock(t *testing.T) {
 	}
 }
 
+func TestEnforcerClient_NetworkErrorFailOpenAllows(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close()
+
+	client := thoth.NewEnforcerClient(srv.URL, "", true)
+	dec, err := client.Check(context.Background(), thoth.CheckRequest{ToolName: "any_tool", SessionID: "sess-1"})
+
+	if err != nil {
+		t.Fatalf("unexpected error in fail-open mode: %v", err)
+	}
+	if dec.Decision != thoth.DecisionAllow {
+		t.Errorf("decision = %q, want %q", dec.Decision, thoth.DecisionAllow)
+	}
+}
+
 func TestEnforcerClient_Non200FallsBackToBlock(t *testing.T) {
 	t.Parallel()
 	srv := makeEnforcerServer(t, thoth.DecisionBlock, "internal error", http.StatusServiceUnavailable)
 	defer srv.Close()
 
-	client := thoth.NewEnforcerClient(srv.URL, "")
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	dec, err := client.Check(context.Background(), thoth.CheckRequest{ToolName: "tool", SessionID: "sess-1"})
 
 	if err == nil {
@@ -183,6 +199,38 @@ func TestEnforcerClient_Non200FallsBackToBlock(t *testing.T) {
 	}
 	if dec.Decision != thoth.DecisionBlock {
 		t.Errorf("fallback Decision = %q, want %q", dec.Decision, thoth.DecisionBlock)
+	}
+}
+
+func TestEnforcerClient_RetryableStatusFailOpenAllows(t *testing.T) {
+	t.Parallel()
+	srv := makeEnforcerServer(t, thoth.DecisionBlock, "internal error", http.StatusServiceUnavailable)
+	defer srv.Close()
+
+	client := thoth.NewEnforcerClient(srv.URL, "", true)
+	dec, err := client.Check(context.Background(), thoth.CheckRequest{ToolName: "tool", SessionID: "sess-1"})
+
+	if err != nil {
+		t.Fatalf("unexpected error in fail-open mode: %v", err)
+	}
+	if dec.Decision != thoth.DecisionAllow {
+		t.Errorf("decision = %q, want %q", dec.Decision, thoth.DecisionAllow)
+	}
+}
+
+func TestEnforcerClient_AuthFailureStillBlocksInFailOpen(t *testing.T) {
+	t.Parallel()
+	srv := makeEnforcerServer(t, thoth.DecisionBlock, "forbidden", http.StatusForbidden)
+	defer srv.Close()
+
+	client := thoth.NewEnforcerClient(srv.URL, "", true)
+	dec, err := client.Check(context.Background(), thoth.CheckRequest{ToolName: "tool", SessionID: "sess-1"})
+
+	if err == nil {
+		t.Fatal("expected error on auth failure")
+	}
+	if dec.Decision != thoth.DecisionBlock {
+		t.Errorf("decision = %q, want %q", dec.Decision, thoth.DecisionBlock)
 	}
 }
 
@@ -198,7 +246,7 @@ func TestEnforcerClient_RespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	client := thoth.NewEnforcerClient(srv.URL, "")
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	dec, err := client.Check(ctx, thoth.CheckRequest{ToolName: "tool", SessionID: "sess-1"})
 
 	if err == nil {
@@ -211,7 +259,7 @@ func TestEnforcerClient_RespectsContextCancellation(t *testing.T) {
 
 func TestEnforcerClient_Has5sDefaultTimeout(t *testing.T) {
 	t.Parallel()
-	client := thoth.NewEnforcerClient("http://enforcer:8080", "")
+	client := thoth.NewEnforcerClient("http://enforcer:8080", "", false)
 	if client.Timeout() != 5*time.Second {
 		t.Errorf("Timeout() = %v, want 5s", client.Timeout())
 	}
@@ -231,7 +279,7 @@ func TestEnforcerClient_IncludesToolArgsInPayload(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := thoth.NewEnforcerClient(srv.URL, "")
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	_, err := client.Check(context.Background(), thoth.CheckRequest{
 		ToolName:         "read_file",
 		SessionID:        "sess-args",
@@ -280,7 +328,7 @@ func TestEnforcerClient_IncludesEnvironmentAndTraceID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := thoth.NewEnforcerClient(srv.URL, "")
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	_, err := client.Check(context.Background(), thoth.CheckRequest{
 		ToolName:           "read_file",
 		SessionID:          "sess-env",
@@ -315,7 +363,7 @@ func TestEnforcerClient_PropagatesUserScopeAndSessionIntent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := thoth.NewEnforcerClient(srv.URL, "")
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	_, err := client.Check(context.Background(), thoth.CheckRequest{
 		ToolName:           "read_file",
 		SessionID:          "sess-user",
@@ -371,7 +419,7 @@ func TestEnforcerClient_PropagatesIdentityBinding(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := thoth.NewEnforcerClient(srv.URL, "")
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	_, err := client.Check(context.Background(), thoth.CheckRequest{
 		ToolName:  "read_file",
 		SessionID: "sess-ident",

@@ -27,6 +27,7 @@ export THOTH_APPROVED_SCOPE="read_file,search_docs"
 export THOTH_SESSION_INTENT="triage"
 export THOTH_EVENT_INGEST_TOKEN="ingest-token-optional"
 export THOTH_ENFORCEMENT_MODE="block" # optional override; default is block (deny)
+export THOTH_FAIL_OPEN="false" # optional; true allows on enforcer network/429/5xx failures
 export THOTH_LOG_LEVEL="DEBUG" # optional; falls back to LOG_LEVEL when unset
 ```
 
@@ -104,7 +105,7 @@ _, _ = wrappedOpenAI["search_docs"](context.Background(), map[string]any{"query"
 
 ## Notes
 
-- Enforcement is fail-closed on transport errors (tool execution is blocked if the enforcer is unreachable).
+- Enforcement is fail-closed by default. Set `Config.FailOpen` or `THOTH_FAIL_OPEN=true` to allow tool execution when the enforcer is unavailable (network/429/5xx). Auth failures remain blocked.
 - `PolicyViolationError` includes `DecisionReasonCode` and `ActionClassification` for deterministic policy analytics.
 - `StepUpRequiredError` is returned when a pending step-up approval is surfaced with a hold token; step-up timeout/deny outcomes remain `PolicyViolationError` blocks.
 - Decision debug logs include `hold_token` when present (`STEP_UP` flows). Use `THOTH_LOG_LEVEL` (`DEBUG`, `INFO`, `WARN`, `ERROR`) to tune SDK decision-log verbosity; fallback is `LOG_LEVEL`.

@@ -28,8 +28,9 @@ type ToolFunc func(ctx context.Context, args map[string]any) (any, error)
 //   - MODIFY:  execution proceeds with policy-modified tool arguments.
 //   - DEFER:   execution is deferred; a *PolicyViolationError is returned.
 //
-// Fail-closed: if the enforcer is unreachable, the tool call is blocked and
-// a *PolicyViolationError is returned.
+// Fail-closed by default: if the enforcer is unreachable, the tool call is
+// blocked and a *PolicyViolationError is returned. Set Config.FailOpen (or
+// THOTH_FAIL_OPEN=true) to allow tool execution on infrastructure failures.
 //
 // Example:
 //
@@ -108,25 +109,31 @@ func translateError(err error) error {
 			return sue
 		}
 		return &PolicyViolationError{
-			ToolName:              pve.ToolName,
-			Reason:                pve.Reason,
-			ViolationID:           pve.ViolationID,
-			DecisionReasonCode:    pve.DecisionReasonCode,
-			ActionClassification:  pve.ActionClassification,
-			AuthorizationDecision: pve.AuthorizationDecision,
-			DeferTimeoutSeconds:   pve.DeferTimeoutSeconds,
-			StepUpTimeoutSeconds:  pve.StepUpTimeoutSeconds,
-			RiskScore:             pve.RiskScore,
-			LatencyMs:             pve.LatencyMs,
-			PackID:                pve.PackID,
-			PackVersion:           pve.PackVersion,
-			RuleVersion:           pve.RuleVersion,
-			RegulatoryRegimes:     append([]string{}, pve.RegulatoryRegimes...),
-			MatchedRuleIDs:        append([]string{}, pve.MatchedRuleIDs...),
-			MatchedControlIDs:     append([]string{}, pve.MatchedControlIDs...),
-			PolicyReferences:      append([]string{}, pve.PolicyReferences...),
-			ModelSignals:          append([]string{}, pve.ModelSignals...),
-			Receipt:               cloneAnyMap(pve.Receipt),
+			ToolName:                pve.ToolName,
+			Reason:                  pve.Reason,
+			ViolationID:             pve.ViolationID,
+			DecisionReasonCode:      pve.DecisionReasonCode,
+			ActionClassification:    pve.ActionClassification,
+			AuthorizationDecision:   pve.AuthorizationDecision,
+			DeferTimeoutSeconds:     pve.DeferTimeoutSeconds,
+			StepUpTimeoutSeconds:    pve.StepUpTimeoutSeconds,
+			RiskScore:               pve.RiskScore,
+			LatencyMs:               pve.LatencyMs,
+			PackID:                  pve.PackID,
+			PackVersion:             pve.PackVersion,
+			RuleVersion:             pve.RuleVersion,
+			RegulatoryRegimes:       append([]string{}, pve.RegulatoryRegimes...),
+			MatchedRuleIDs:          append([]string{}, pve.MatchedRuleIDs...),
+			MatchedControlIDs:       append([]string{}, pve.MatchedControlIDs...),
+			PolicyReferences:        append([]string{}, pve.PolicyReferences...),
+			ModelSignals:            append([]string{}, pve.ModelSignals...),
+			Receipt:                 cloneAnyMap(pve.Receipt),
+			DecisionEnvelopeVersion: pve.DecisionEnvelopeVersion,
+			EnforcementTraceID:      pve.EnforcementTraceID,
+			FastMLFeatures:          cloneFloat64Map(pve.FastMLFeatures),
+			ScoreComponents:         cloneAnyMap(pve.ScoreComponents),
+			TopContributors:         cloneMapSlice(pve.TopContributors),
+			DecisionEvidence:        cloneAnyMap(pve.DecisionEvidence),
 		}
 	}
 
@@ -141,6 +148,28 @@ func cloneAnyMap(values map[string]any) map[string]any {
 	out := make(map[string]any, len(values))
 	for key, value := range values {
 		out[key] = value
+	}
+	return out
+}
+
+func cloneFloat64Map(values map[string]float64) map[string]float64 {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneMapSlice(values []map[string]any) []map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, len(values))
+	for i, item := range values {
+		out[i] = cloneAnyMap(item)
 	}
 	return out
 }
