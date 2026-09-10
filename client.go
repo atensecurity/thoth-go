@@ -37,12 +37,21 @@
 //	THOTH_ENFORCEMENT_MODE — enforcement mode override (default: block)
 //	THOTH_ENFORCEMENT — legacy alias for enforcement mode override
 //	THOTH_ENFORCEMENT_TRACE_ID — explicit cross-service trace ID override
+//	THOTH_ACTION_ATTESTATION_ID — optional per-action attestation ID override
 //	THOTH_USER_ID    — user identifier for policy evaluation
 //	THOTH_APPROVED_SCOPE — comma-delimited approved tool names
 //	THOTH_SESSION_INTENT — HIPAA minimum-necessary session intent
 //	THOTH_PURPOSE — default purpose context for tool calls
 //	THOTH_DATA_CLASSIFICATION — default data classification context
 //	THOTH_TASK_CONTEXT_JSON — JSON object with initiated_by/task_id/chain
+//	THOTH_MODEL_NAME — optional model name context for policy checks
+//	THOTH_MODEL_PROVIDER — optional model provider context for policy checks
+//	THOTH_MODEL_ARTIFACT_ID — optional model artifact ID for supply-chain gate
+//	THOTH_MODEL_ARTIFACT_VERSION — optional model artifact version for supply-chain gate
+//	THOTH_AUTH_CONTEXT_JSON — optional JSON auth context propagated to enforcer
+//	THOTH_DELEGATION_CONTEXT_JSON — optional JSON delegation context propagated to enforcer
+//	THOTH_MCP_RUNTIME_IDENTITY — optional runtime identity propagated for MCP capability checks
+//	THOTH_REQUEST_METADATA_JSON — optional JSON metadata merged into enforce payload
 //	THOTH_LOG_LEVEL — optional SDK decision-log level override (falls back to LOG_LEVEL)
 //	THOTH_FAIL_OPEN — when true, enforcer transport/5xx/429 failures allow tool execution
 package thoth
@@ -123,10 +132,53 @@ type Config struct {
 	// Env fallback: THOTH_TASK_CONTEXT_JSON.
 	TaskContext map[string]any
 
+	// ModelName is an optional model identifier propagated to policy checks.
+	// Env fallback: THOTH_MODEL_NAME.
+	ModelName string
+
+	// ModelProvider is an optional model-provider identifier propagated to
+	// policy checks.
+	// Env fallback: THOTH_MODEL_PROVIDER.
+	ModelProvider string
+
+	// ModelArtifactID identifies the active model artifact for deterministic
+	// supply-chain activation checks.
+	// Env fallback: THOTH_MODEL_ARTIFACT_ID.
+	ModelArtifactID string
+
+	// ModelArtifactVersion is the expected version for the active model
+	// artifact.
+	// Env fallback: THOTH_MODEL_ARTIFACT_VERSION.
+	ModelArtifactVersion string
+
+	// AuthContext is optional principal/service identity context used by
+	// policy checks.
+	// Env fallback: THOTH_AUTH_CONTEXT_JSON.
+	AuthContext map[string]any
+
+	// DelegationContext is optional task-delegation context used by policy
+	// checks.
+	// Env fallback: THOTH_DELEGATION_CONTEXT_JSON.
+	DelegationContext map[string]any
+
+	// MCPRuntimeIdentity is an optional runtime identity propagated for MCP
+	// capability-scoped checks.
+	// Env fallback: THOTH_MCP_RUNTIME_IDENTITY.
+	MCPRuntimeIdentity string
+
+	// RequestMetadata is optional metadata merged into each enforcement request.
+	// Env fallback: THOTH_REQUEST_METADATA_JSON.
+	RequestMetadata map[string]any
+
 	// EnforcementTraceID sets an explicit trace correlation ID for enforcement
 	// requests. When empty, session ID is used.
 	// Env fallback: THOTH_ENFORCEMENT_TRACE_ID.
 	EnforcementTraceID string
+
+	// ActionAttestationID sets an explicit action-attestation correlation ID for
+	// enforce requests. When empty, SDK generates one per tool call.
+	// Env fallback: THOTH_ACTION_ATTESTATION_ID.
+	ActionAttestationID string
 
 	// Timeout is the HTTP timeout for enforcer calls. Default: 5s.
 	Timeout time.Duration
@@ -188,10 +240,37 @@ func applyEnvFallbacks(cfg Config) Config {
 		cfg.DataClassification = strings.TrimSpace(os.Getenv("THOTH_DATA_CLASSIFICATION"))
 	}
 	if len(cfg.TaskContext) == 0 {
-		cfg.TaskContext = parseTaskContextJSON(os.Getenv("THOTH_TASK_CONTEXT_JSON"))
+		cfg.TaskContext = parseJSONMap(os.Getenv("THOTH_TASK_CONTEXT_JSON"))
+	}
+	if cfg.ModelName == "" {
+		cfg.ModelName = strings.TrimSpace(os.Getenv("THOTH_MODEL_NAME"))
+	}
+	if cfg.ModelProvider == "" {
+		cfg.ModelProvider = strings.TrimSpace(os.Getenv("THOTH_MODEL_PROVIDER"))
+	}
+	if cfg.ModelArtifactID == "" {
+		cfg.ModelArtifactID = strings.TrimSpace(os.Getenv("THOTH_MODEL_ARTIFACT_ID"))
+	}
+	if cfg.ModelArtifactVersion == "" {
+		cfg.ModelArtifactVersion = strings.TrimSpace(os.Getenv("THOTH_MODEL_ARTIFACT_VERSION"))
+	}
+	if len(cfg.AuthContext) == 0 {
+		cfg.AuthContext = parseJSONMap(os.Getenv("THOTH_AUTH_CONTEXT_JSON"))
+	}
+	if len(cfg.DelegationContext) == 0 {
+		cfg.DelegationContext = parseJSONMap(os.Getenv("THOTH_DELEGATION_CONTEXT_JSON"))
+	}
+	if cfg.MCPRuntimeIdentity == "" {
+		cfg.MCPRuntimeIdentity = strings.TrimSpace(os.Getenv("THOTH_MCP_RUNTIME_IDENTITY"))
+	}
+	if len(cfg.RequestMetadata) == 0 {
+		cfg.RequestMetadata = parseJSONMap(os.Getenv("THOTH_REQUEST_METADATA_JSON"))
 	}
 	if cfg.EnforcementTraceID == "" {
 		cfg.EnforcementTraceID = os.Getenv("THOTH_ENFORCEMENT_TRACE_ID")
+	}
+	if cfg.ActionAttestationID == "" {
+		cfg.ActionAttestationID = os.Getenv("THOTH_ACTION_ATTESTATION_ID")
 	}
 	if cfg.Enforcement == "" {
 		cfg.Enforcement = os.Getenv("THOTH_ENFORCEMENT_MODE")
@@ -221,17 +300,26 @@ func toInternalConfig(cfg Config) ithoth.Config {
 		EventIngestToken: cfg.EventIngestToken,
 		APIURL:           cfg.APIURL,
 		// Enforce a single URL contract for SDK users.
-		EnforcerURL:        cfg.APIURL,
-		Environment:        cfg.Environment,
-		UserID:             cfg.UserID,
-		IdentityBinding:    cfg.IdentityBinding,
-		ApprovedScope:      cfg.ApprovedScope,
-		SessionIntent:      cfg.SessionIntent,
-		Purpose:            cfg.Purpose,
-		DataClassification: cfg.DataClassification,
-		TaskContext:        cfg.TaskContext,
-		FailOpen:           cfg.FailOpen,
-		EnforcementTraceID: cfg.EnforcementTraceID,
+		EnforcerURL:          cfg.APIURL,
+		Environment:          cfg.Environment,
+		UserID:               cfg.UserID,
+		IdentityBinding:      cfg.IdentityBinding,
+		ApprovedScope:        cfg.ApprovedScope,
+		SessionIntent:        cfg.SessionIntent,
+		Purpose:              cfg.Purpose,
+		DataClassification:   cfg.DataClassification,
+		TaskContext:          cfg.TaskContext,
+		ModelName:            cfg.ModelName,
+		ModelProvider:        cfg.ModelProvider,
+		ModelArtifactID:      cfg.ModelArtifactID,
+		ModelArtifactVersion: cfg.ModelArtifactVersion,
+		AuthContext:          cfg.AuthContext,
+		DelegationContext:    cfg.DelegationContext,
+		MCPRuntimeIdentity:   cfg.MCPRuntimeIdentity,
+		RequestMetadata:      cfg.RequestMetadata,
+		FailOpen:             cfg.FailOpen,
+		EnforcementTraceID:   cfg.EnforcementTraceID,
+		ActionAttestationID:  cfg.ActionAttestationID,
 	}
 	if cfg.Enforcement != "" {
 		internal.Enforcement = ithoth.EnforcementMode(strings.ToLower(strings.TrimSpace(cfg.Enforcement)))
@@ -306,7 +394,7 @@ func (c *Client) Close() {
 	}
 }
 
-func parseTaskContextJSON(raw string) map[string]any {
+func parseJSONMap(raw string) map[string]any {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}

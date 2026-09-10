@@ -190,6 +190,7 @@ type EnforcementDecision struct {
 	AuthorizationDecision   string             `json:"authorization_decision,omitempty"`
 	DecisionReasonCode      string             `json:"decision_reason_code,omitempty"`
 	ActionClassification    string             `json:"action_classification,omitempty"`
+	ActionAttestationID     string             `json:"action_attestation_id,omitempty"`
 	Reason                  string             `json:"reason,omitempty"`
 	ViolationID             string             `json:"violation_id,omitempty"`
 	HoldToken               string             `json:"hold_token,omitempty"`
@@ -238,6 +239,9 @@ type CheckRequest struct {
 	// EnforcementTraceID correlates a tool call through enforcement and
 	// downstream policy engines.
 	EnforcementTraceID string
+	// ActionAttestationID is the per-action correlation identifier used for
+	// independent action attestation flows.
+	ActionAttestationID string
 	// SessionIntent declares the purpose of the session for HIPAA minimum-necessary
 	// enforcement. When a compliance pack defines session_scopes, tools outside the
 	// declared intent scope are step-up-challenged. Empty string means no intent check.
@@ -249,6 +253,22 @@ type CheckRequest struct {
 	DataClassification string
 	// TaskContext carries initiated_by/task_id/chain attribution.
 	TaskContext map[string]any
+	// ModelName is the active model identifier for this request.
+	ModelName string
+	// ModelProvider is the active model provider identifier for this request.
+	ModelProvider string
+	// ModelArtifactID identifies the active model artifact under evaluation.
+	ModelArtifactID string
+	// ModelArtifactVersion identifies the active model artifact version.
+	ModelArtifactVersion string
+	// AuthContext carries optional principal/service identity context.
+	AuthContext map[string]any
+	// DelegationContext carries optional delegation/task context.
+	DelegationContext map[string]any
+	// MCPRuntimeIdentity is an optional runtime identity for capability checks.
+	MCPRuntimeIdentity string
+	// RequestMetadata is optional metadata merged into enforce payload.
+	RequestMetadata map[string]any
 }
 
 // Emitter is the interface for behavioral event emission backends.
@@ -289,6 +309,9 @@ type Config struct {
 	// EnforcementTraceID correlates requests through enforcement and downstream
 	// policy engines. Defaults to the session ID when empty.
 	EnforcementTraceID string
+	// ActionAttestationID sets an explicit per-action attestation identifier.
+	// When empty, SDK generates a new UUID for each tool call.
+	ActionAttestationID string
 	// SessionIntent declares the purpose of this session for HIPAA minimum-necessary
 	// enforcement. Passed on every enforce call. Empty string means no intent check.
 	SessionIntent string
@@ -298,6 +321,25 @@ type Config struct {
 	DataClassification string
 	// TaskContext includes initiated_by/task_id/chain attribution metadata.
 	TaskContext map[string]any
+	// ModelName is the active model identifier propagated to policy checks.
+	ModelName string
+	// ModelProvider is the active model provider identifier propagated to
+	// policy checks.
+	ModelProvider string
+	// ModelArtifactID identifies the active model artifact for supply-chain
+	// policy checks.
+	ModelArtifactID string
+	// ModelArtifactVersion identifies the active model artifact version.
+	ModelArtifactVersion string
+	// AuthContext carries optional principal/service identity context.
+	AuthContext map[string]any
+	// DelegationContext carries optional delegation/task context.
+	DelegationContext map[string]any
+	// MCPRuntimeIdentity is an optional runtime identity for MCP capability
+	// checks.
+	MCPRuntimeIdentity string
+	// RequestMetadata is optional metadata merged into each enforce payload.
+	RequestMetadata map[string]any
 	// FailOpen allows tool execution when enforcement infrastructure is unavailable
 	// (network error, 429, or 5xx). Auth failures still block.
 	FailOpen bool
@@ -323,6 +365,15 @@ func ApplyConfigDefaults(cfg Config) Config {
 	}
 	if cfg.TaskContext == nil {
 		cfg.TaskContext = map[string]any{}
+	}
+	if cfg.AuthContext == nil {
+		cfg.AuthContext = map[string]any{}
+	}
+	if cfg.DelegationContext == nil {
+		cfg.DelegationContext = map[string]any{}
+	}
+	if cfg.RequestMetadata == nil {
+		cfg.RequestMetadata = map[string]any{}
 	}
 	return cfg
 }

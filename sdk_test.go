@@ -25,10 +25,6 @@ func loadGoldenDecisionFixture(t *testing.T, name string) map[string]any {
 	}
 	fixturePath := filepath.Join(
 		filepath.Dir(currentFile),
-		"..",
-		"..",
-		"..",
-		"..",
 		"testdata",
 		"sdk",
 		"enforcement_decision_golden.json",
@@ -78,16 +74,24 @@ type enforcerResponse struct {
 }
 
 type capturedEnforceRequest struct {
-	ToolName           string         `json:"tool_name"`
-	SessionID          string         `json:"session_id"`
-	UserID             string         `json:"user_id"`
-	IdentityBinding    map[string]any `json:"identity_binding"`
-	ApprovedScope      []string       `json:"approved_scope"`
-	SessionIntent      string         `json:"session_intent"`
-	ToolArgs           map[string]any `json:"tool_args"`
-	Environment        string         `json:"environment"`
-	EnforcementMode    string         `json:"enforcement_mode"`
-	EnforcementTraceID string         `json:"enforcement_trace_id"`
+	ToolName             string         `json:"tool_name"`
+	SessionID            string         `json:"session_id"`
+	UserID               string         `json:"user_id"`
+	IdentityBinding      map[string]any `json:"identity_binding"`
+	ApprovedScope        []string       `json:"approved_scope"`
+	SessionIntent        string         `json:"session_intent"`
+	ToolArgs             map[string]any `json:"tool_args"`
+	ModelName            string         `json:"model_name"`
+	ModelProvider        string         `json:"model_provider"`
+	ModelArtifactID      string         `json:"model_artifact_id"`
+	ModelArtifactVersion string         `json:"model_artifact_version"`
+	AuthContext          map[string]any `json:"auth_context"`
+	DelegationContext    map[string]any `json:"delegation_context"`
+	Metadata             map[string]any `json:"metadata"`
+	Environment          string         `json:"environment"`
+	EnforcementMode      string         `json:"enforcement_mode"`
+	EnforcementTraceID   string         `json:"enforcement_trace_id"`
+	ActionAttestationID  string         `json:"action_attestation_id"`
 }
 
 // mockEnforcer returns an httptest.Server that always responds with resp.
@@ -826,6 +830,9 @@ func TestWrapTool_DefaultsEnvironmentAndTraceID(t *testing.T) {
 	if got.EnforcementTraceID != got.SessionID {
 		t.Fatalf("enforcement_trace_id = %q, want session_id %q", got.EnforcementTraceID, got.SessionID)
 	}
+	if got.ActionAttestationID == "" {
+		t.Fatal("action_attestation_id should not be empty")
+	}
 }
 
 func TestWrapTool_UsesConfiguredEnvironmentAndTraceID(t *testing.T) {
@@ -844,13 +851,14 @@ func TestWrapTool_UsesConfiguredEnvironmentAndTraceID(t *testing.T) {
 	defer srv.Close()
 
 	client, err := sdk.NewClient(sdk.Config{
-		APIURL:             srv.URL,
-		APIKey:             "test-key",
-		TenantID:           "test-tenant",
-		AgentID:            "test-agent",
-		Timeout:            2 * time.Second,
-		Environment:        "dev",
-		EnforcementTraceID: "trace-explicit",
+		APIURL:              srv.URL,
+		APIKey:              "test-key",
+		TenantID:            "test-tenant",
+		AgentID:             "test-agent",
+		Timeout:             2 * time.Second,
+		Environment:         "dev",
+		EnforcementTraceID:  "trace-explicit",
+		ActionAttestationID: "attest-explicit",
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -873,6 +881,48 @@ func TestWrapTool_UsesConfiguredEnvironmentAndTraceID(t *testing.T) {
 	}
 	if got.EnforcementTraceID != "trace-explicit" {
 		t.Fatalf("enforcement_trace_id = %q, want %q", got.EnforcementTraceID, "trace-explicit")
+	}
+	if got.ActionAttestationID != "attest-explicit" {
+		t.Fatalf("action_attestation_id = %q, want %q", got.ActionAttestationID, "attest-explicit")
+	}
+}
+
+func TestNewClientFromEnv_UsesActionAttestationIDFallback(t *testing.T) {
+	var got capturedEnforceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != enforcePath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "ALLOW"})
+	}))
+	defer srv.Close()
+
+	t.Setenv("THOTH_API_KEY", "env-api-key")
+	t.Setenv("THOTH_TENANT_ID", "env-tenant")
+	t.Setenv("THOTH_AGENT_ID", "env-agent")
+	t.Setenv("THOTH_API_URL", srv.URL)
+	t.Setenv("THOTH_ACTION_ATTESTATION_ID", "attest-env")
+
+	client, err := sdk.NewClient(sdk.Config{})
+	if err != nil {
+		t.Fatalf("NewClient from env fallback: %v", err)
+	}
+	defer client.Close()
+
+	tool := client.WrapTool("echo", func(_ context.Context, input string) (string, error) {
+		return input, nil
+	})
+	_, err = tool(context.Background(), testHello)
+	if err != nil {
+		t.Fatalf("WrapTool with env action attestation fallback: unexpected error: %v", err)
+	}
+	if got.ActionAttestationID != "attest-env" {
+		t.Fatalf("action_attestation_id = %q, want %q", got.ActionAttestationID, "attest-env")
 	}
 }
 
@@ -933,6 +983,86 @@ func TestWrapTool_PropagatesUserScopeAndSessionIntent(t *testing.T) {
 	}
 	if got.IdentityBinding["user_id"] != "user-456" {
 		t.Fatalf("identity_binding.user_id = %v, want %q", got.IdentityBinding["user_id"], "user-456")
+	}
+}
+
+func TestWrapTool_PropagatesModelAndMCPContext(t *testing.T) {
+	var got capturedEnforceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != enforcePath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "ALLOW"})
+	}))
+	defer srv.Close()
+
+	client, err := sdk.NewClient(sdk.Config{
+		APIURL:               srv.URL,
+		APIKey:               "test-key",
+		TenantID:             "test-tenant",
+		AgentID:              "test-agent",
+		UserID:               "user-123",
+		ApprovedScope:        []string{"write_file"},
+		ModelName:            "gpt-5.6",
+		ModelProvider:        "openai",
+		ModelArtifactID:      "artifact-prod-a",
+		ModelArtifactVersion: "2026.08.19",
+		AuthContext: map[string]any{
+			"principal": "svc://thoth-runtime",
+		},
+		DelegationContext: map[string]any{
+			"task_id": "task-42",
+		},
+		MCPRuntimeIdentity: "mcp-runtime-prod",
+		RequestMetadata: map[string]any{
+			"source": "sdk-test",
+		},
+		Timeout: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	tool := client.WrapTool("write_file", func(_ context.Context, input string) (string, error) {
+		return input, nil
+	})
+	_, err = tool(context.Background(), testHello)
+	if err != nil {
+		t.Fatalf("WrapTool(model/mcp context): unexpected error: %v", err)
+	}
+
+	if got.ModelName != "gpt-5.6" {
+		t.Fatalf("model_name = %q, want %q", got.ModelName, "gpt-5.6")
+	}
+	if got.ModelProvider != "openai" {
+		t.Fatalf("model_provider = %q, want %q", got.ModelProvider, "openai")
+	}
+	if got.ModelArtifactID != "artifact-prod-a" {
+		t.Fatalf("model_artifact_id = %q, want %q", got.ModelArtifactID, "artifact-prod-a")
+	}
+	if got.ModelArtifactVersion != "2026.08.19" {
+		t.Fatalf("model_artifact_version = %q, want %q", got.ModelArtifactVersion, "2026.08.19")
+	}
+	if got.AuthContext["principal"] != "svc://thoth-runtime" {
+		t.Fatalf("auth_context.principal = %v, want %q", got.AuthContext["principal"], "svc://thoth-runtime")
+	}
+	if got.AuthContext["service_identity"] != "mcp-runtime-prod" {
+		t.Fatalf("auth_context.service_identity = %v, want %q", got.AuthContext["service_identity"], "mcp-runtime-prod")
+	}
+	if got.DelegationContext["task_id"] != "task-42" {
+		t.Fatalf("delegation_context.task_id = %v, want %q", got.DelegationContext["task_id"], "task-42")
+	}
+	if got.Metadata["mcp_runtime_identity"] != "mcp-runtime-prod" {
+		t.Fatalf("metadata.mcp_runtime_identity = %v, want %q", got.Metadata["mcp_runtime_identity"], "mcp-runtime-prod")
+	}
+	if got.Metadata["source"] != "sdk-test" {
+		t.Fatalf("metadata.source = %v, want %q", got.Metadata["source"], "sdk-test")
 	}
 }
 

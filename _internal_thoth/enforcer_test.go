@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/atensecurity/thoth-go/_internal_thoth"
+	thoth "github.com/atensecurity/thoth-go/_internal_thoth"
 )
 
 func loadGoldenDecisionFixture(t *testing.T, name string) map[string]any {
@@ -22,9 +22,6 @@ func loadGoldenDecisionFixture(t *testing.T, name string) map[string]any {
 	}
 	fixturePath := filepath.Join(
 		filepath.Dir(currentFile),
-		"..",
-		"..",
-		"..",
 		"..",
 		"testdata",
 		"sdk",
@@ -46,19 +43,20 @@ func loadGoldenDecisionFixture(t *testing.T, name string) map[string]any {
 }
 
 type captureEnforceRequest struct {
-	ToolName           string         `json:"tool_name"`
-	SessionID          string         `json:"session_id"`
-	UserID             string         `json:"user_id"`
-	IdentityBinding    map[string]any `json:"identity_binding"`
-	ApprovedScope      []string       `json:"approved_scope"`
-	SessionToolCalls   []string       `json:"session_tool_calls"`
-	ToolArgs           map[string]any `json:"tool_args"`
-	SessionIntent      string         `json:"session_intent"`
-	Purpose            string         `json:"purpose"`
-	DataClassification string         `json:"data_classification"`
-	TaskContext        map[string]any `json:"task_context"`
-	Environment        string         `json:"environment"`
-	TraceID            string         `json:"enforcement_trace_id"`
+	ToolName            string         `json:"tool_name"`
+	SessionID           string         `json:"session_id"`
+	UserID              string         `json:"user_id"`
+	IdentityBinding     map[string]any `json:"identity_binding"`
+	ApprovedScope       []string       `json:"approved_scope"`
+	SessionToolCalls    []string       `json:"session_tool_calls"`
+	ToolArgs            map[string]any `json:"tool_args"`
+	SessionIntent       string         `json:"session_intent"`
+	Purpose             string         `json:"purpose"`
+	DataClassification  string         `json:"data_classification"`
+	TaskContext         map[string]any `json:"task_context"`
+	Environment         string         `json:"environment"`
+	TraceID             string         `json:"enforcement_trace_id"`
+	ActionAttestationID string         `json:"action_attestation_id"`
 }
 
 func makeEnforcerServer(t *testing.T, decision thoth.DecisionType, reason string, statusCode int) *httptest.Server {
@@ -330,12 +328,13 @@ func TestEnforcerClient_IncludesEnvironmentAndTraceID(t *testing.T) {
 
 	client := thoth.NewEnforcerClient(srv.URL, "", false)
 	_, err := client.Check(context.Background(), thoth.CheckRequest{
-		ToolName:           "read_file",
-		SessionID:          "sess-env",
-		Environment:        "dev",
-		EnforcementTraceID: "trace-123",
-		SessionToolCalls:   []string{"list_files"},
-		EnforcementMode:    thoth.Block,
+		ToolName:            "read_file",
+		SessionID:           "sess-env",
+		Environment:         "dev",
+		EnforcementTraceID:  "trace-123",
+		ActionAttestationID: "attest-123",
+		SessionToolCalls:    []string{"list_files"},
+		EnforcementMode:     thoth.Block,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -346,6 +345,39 @@ func TestEnforcerClient_IncludesEnvironmentAndTraceID(t *testing.T) {
 	}
 	if got.TraceID != "trace-123" {
 		t.Fatalf("enforcement_trace_id = %q, want %q", got.TraceID, "trace-123")
+	}
+	if got.ActionAttestationID != "attest-123" {
+		t.Fatalf("action_attestation_id = %q, want %q", got.ActionAttestationID, "attest-123")
+	}
+}
+
+func TestEnforcerClient_GeneratesActionAttestationIDWhenMissing(t *testing.T) {
+	t.Parallel()
+	var got captureEnforceRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(thoth.EnforcementDecision{Decision: thoth.DecisionAllow})
+	}))
+	defer srv.Close()
+
+	client := thoth.NewEnforcerClient(srv.URL, "", false)
+	_, err := client.Check(context.Background(), thoth.CheckRequest{
+		ToolName:         "read_file",
+		SessionID:        "sess-env",
+		Environment:      "dev",
+		SessionToolCalls: []string{"list_files"},
+		EnforcementMode:  thoth.Block,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ActionAttestationID == "" {
+		t.Fatal("action_attestation_id should be generated when missing")
 	}
 }
 

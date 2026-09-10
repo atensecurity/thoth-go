@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/atensecurity/thoth-go/_internal_thoth"
+	thoth "github.com/atensecurity/thoth-go/_internal_thoth"
 )
 
 func TestPolicyViolationError_Error(t *testing.T) {

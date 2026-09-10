@@ -16,24 +16,32 @@ import (
 const defaultEnforcerTimeout = 5 * time.Second
 
 type enforcerRequest struct {
-	RequestID          string          `json:"request_id"`
-	AgentID            string          `json:"agent_id"`
-	TenantID           string          `json:"tenant_id"`
-	ToolName           string          `json:"tool_name"`
-	SessionID          string          `json:"session_id"`
-	UserID             string          `json:"user_id"`
-	IdentityBinding    map[string]any  `json:"identity_binding,omitempty"`
-	ApprovedScope      []string        `json:"approved_scope"`
-	SessionToolCalls   []string        `json:"session_tool_calls"`
-	ToolArgs           map[string]any  `json:"tool_args,omitempty"`
-	EnforcementMode    EnforcementMode `json:"enforcement_mode"`
-	Environment        string          `json:"environment"`
-	TraceID            string          `json:"enforcement_trace_id,omitempty"`
-	OccurredAt         time.Time       `json:"occurred_at"`
-	SessionIntent      string          `json:"session_intent,omitempty"`
-	Purpose            string          `json:"purpose,omitempty"`
-	DataClassification string          `json:"data_classification,omitempty"`
-	TaskContext        map[string]any  `json:"task_context,omitempty"`
+	RequestID            string          `json:"request_id"`
+	AgentID              string          `json:"agent_id"`
+	TenantID             string          `json:"tenant_id"`
+	ToolName             string          `json:"tool_name"`
+	SessionID            string          `json:"session_id"`
+	UserID               string          `json:"user_id"`
+	IdentityBinding      map[string]any  `json:"identity_binding,omitempty"`
+	ApprovedScope        []string        `json:"approved_scope"`
+	SessionToolCalls     []string        `json:"session_tool_calls"`
+	ToolArgs             map[string]any  `json:"tool_args,omitempty"`
+	EnforcementMode      EnforcementMode `json:"enforcement_mode"`
+	Environment          string          `json:"environment"`
+	TraceID              string          `json:"enforcement_trace_id,omitempty"`
+	ActionAttestationID  string          `json:"action_attestation_id,omitempty"`
+	OccurredAt           time.Time       `json:"occurred_at"`
+	SessionIntent        string          `json:"session_intent,omitempty"`
+	Purpose              string          `json:"purpose,omitempty"`
+	DataClassification   string          `json:"data_classification,omitempty"`
+	TaskContext          map[string]any  `json:"task_context,omitempty"`
+	ModelName            string          `json:"model_name,omitempty"`
+	ModelProvider        string          `json:"model_provider,omitempty"`
+	ModelArtifactID      string          `json:"model_artifact_id,omitempty"`
+	ModelArtifactVersion string          `json:"model_artifact_version,omitempty"`
+	AuthContext          map[string]any  `json:"auth_context,omitempty"`
+	DelegationContext    map[string]any  `json:"delegation_context,omitempty"`
+	Metadata             map[string]any  `json:"metadata,omitempty"`
 }
 
 // EnforcerClient calls the Thoth enforcement service to obtain a pre-execution decision.
@@ -79,26 +87,52 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 	if sessionToolCalls == nil {
 		sessionToolCalls = []string{}
 	}
+	actionAttestationID := strings.TrimSpace(check.ActionAttestationID)
+	if actionAttestationID == "" {
+		actionAttestationID = uuid.NewString()
+	}
 
 	reqBody := enforcerRequest{
-		RequestID:          uuid.New().String(),
-		AgentID:            check.AgentID,
-		TenantID:           check.TenantID,
-		ToolName:           check.ToolName,
-		SessionID:          check.SessionID,
-		UserID:             check.UserID,
-		IdentityBinding:    check.IdentityBinding,
-		ApprovedScope:      approvedScope,
-		SessionToolCalls:   sessionToolCalls,
-		ToolArgs:           check.ToolArgs,
-		EnforcementMode:    check.EnforcementMode,
-		Environment:        check.Environment,
-		TraceID:            check.EnforcementTraceID,
-		OccurredAt:         time.Now().UTC(),
-		SessionIntent:      check.SessionIntent,
-		Purpose:            check.Purpose,
-		DataClassification: check.DataClassification,
-		TaskContext:        check.TaskContext,
+		RequestID:            uuid.New().String(),
+		AgentID:              check.AgentID,
+		TenantID:             check.TenantID,
+		ToolName:             check.ToolName,
+		SessionID:            check.SessionID,
+		UserID:               check.UserID,
+		IdentityBinding:      check.IdentityBinding,
+		ApprovedScope:        approvedScope,
+		SessionToolCalls:     sessionToolCalls,
+		ToolArgs:             check.ToolArgs,
+		EnforcementMode:      check.EnforcementMode,
+		Environment:          check.Environment,
+		TraceID:              check.EnforcementTraceID,
+		ActionAttestationID:  actionAttestationID,
+		OccurredAt:           time.Now().UTC(),
+		SessionIntent:        check.SessionIntent,
+		Purpose:              check.Purpose,
+		DataClassification:   check.DataClassification,
+		TaskContext:          check.TaskContext,
+		ModelName:            check.ModelName,
+		ModelProvider:        check.ModelProvider,
+		ModelArtifactID:      check.ModelArtifactID,
+		ModelArtifactVersion: check.ModelArtifactVersion,
+		AuthContext:          check.AuthContext,
+		DelegationContext:    check.DelegationContext,
+		Metadata:             check.RequestMetadata,
+	}
+	if runtimeIdentity := strings.TrimSpace(check.MCPRuntimeIdentity); runtimeIdentity != "" {
+		if reqBody.Metadata == nil {
+			reqBody.Metadata = map[string]any{}
+		}
+		if _, exists := reqBody.Metadata["mcp_runtime_identity"]; !exists {
+			reqBody.Metadata["mcp_runtime_identity"] = runtimeIdentity
+		}
+		if reqBody.AuthContext == nil {
+			reqBody.AuthContext = map[string]any{}
+		}
+		if _, exists := reqBody.AuthContext["service_identity"]; !exists {
+			reqBody.AuthContext["service_identity"] = runtimeIdentity
+		}
 	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
@@ -150,6 +184,9 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 		err = fmt.Errorf("thoth: enforcer decode: %w", decodeErr)
 		log.Printf("thoth: ERROR: %v, fail-closed fallback to BLOCK", err)
 		return fallbackDecision, err
+	}
+	if dec.ActionAttestationID == "" {
+		dec.ActionAttestationID = actionAttestationID
 	}
 	normalizeEnforcementDecision(&dec)
 	return dec, nil

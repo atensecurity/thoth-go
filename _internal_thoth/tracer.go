@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ToolFunc is the function signature for an agent tool.
@@ -104,15 +106,25 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 				t.cfg.EnforcementTraceID,
 				t.session.SessionID,
 			),
-			SessionIntent:      t.cfg.SessionIntent,
-			Purpose:            t.cfg.Purpose,
-			DataClassification: t.cfg.DataClassification,
-			TaskContext:        cloneMap(t.cfg.TaskContext),
+			ActionAttestationID:  resolveActionAttestationID(t.cfg.ActionAttestationID),
+			SessionIntent:        t.cfg.SessionIntent,
+			Purpose:              t.cfg.Purpose,
+			DataClassification:   t.cfg.DataClassification,
+			TaskContext:          cloneMap(t.cfg.TaskContext),
+			ModelName:            strings.TrimSpace(t.cfg.ModelName),
+			ModelProvider:        strings.TrimSpace(t.cfg.ModelProvider),
+			ModelArtifactID:      strings.TrimSpace(t.cfg.ModelArtifactID),
+			ModelArtifactVersion: strings.TrimSpace(t.cfg.ModelArtifactVersion),
+			AuthContext:          resolveAuthContext(t.cfg.AuthContext, t.cfg.MCPRuntimeIdentity),
+			DelegationContext:    resolveDelegationContext(t.cfg.DelegationContext, t.cfg.TaskContext),
+			MCPRuntimeIdentity:   strings.TrimSpace(t.cfg.MCPRuntimeIdentity),
+			RequestMetadata:      cloneMap(t.cfg.RequestMetadata),
 		}
 		baseMetadata := t.baseToolMetadata(
 			name,
 			checkReq.ToolArgs,
 			checkReq.EnforcementTraceID,
+			checkReq.ActionAttestationID,
 			checkReq.Environment,
 		)
 		t.emitLifecycleEvent(
@@ -131,7 +143,13 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			if err != nil {
 				log.Printf("thoth: observe: enforcer unavailable for %q: %v", name, err)
 			} else {
-				t.logDecision(name, checkReq.EnforcementTraceID, dec, "observe")
+				t.logDecision(
+					name,
+					checkReq.EnforcementTraceID,
+					checkReq.ActionAttestationID,
+					dec,
+					"observe",
+				)
 				finalDecision = &dec
 			}
 			return t.runTool(ctx, name, fn, args, sessionToolCalls, startedAt, finalDecision, baseMetadata)
@@ -142,7 +160,13 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			log.Printf("thoth: warn: enforcer check failed for %q: %v", name, err)
 			dec = fallbackDecision
 		}
-		t.logDecision(name, checkReq.EnforcementTraceID, dec, "enforce")
+		t.logDecision(
+			name,
+			checkReq.EnforcementTraceID,
+			checkReq.ActionAttestationID,
+			dec,
+			"enforce",
+		)
 		effectiveArgs := args
 		finalDecision := dec
 
@@ -169,7 +193,13 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			stepCtx, cancel := context.WithTimeout(ctx, t.stepUpTimeout)
 			defer cancel()
 			stepDec := t.stepUp.Wait(stepCtx, dec.HoldToken)
-			t.logDecision(name, checkReq.EnforcementTraceID, stepDec, "step_up_resolved")
+			t.logDecision(
+				name,
+				checkReq.EnforcementTraceID,
+				checkReq.ActionAttestationID,
+				stepDec,
+				"step_up_resolved",
+			)
 			finalDecision = stepDec
 			if stepDec.Decision == DecisionBlock {
 				t.emitBlockEvent(name, stepDec, sessionToolCalls, startedAt, baseMetadata)
@@ -216,13 +246,19 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 	}
 }
 
-func (t *Tracer) logDecision(toolName, traceID string, decision EnforcementDecision, phase string) {
+func (t *Tracer) logDecision(
+	toolName,
+	traceID,
+	actionAttestationID string,
+	decision EnforcementDecision,
+	phase string,
+) {
 	if !shouldLogDecisionDebug() {
 		return
 	}
 
 	log.Printf(
-		"thoth: %s decision tool=%q decision=%s authorization_decision=%q reason_code=%q reason=%q hold_token=%q trace_id=%q session_id=%q",
+		"thoth: %s decision tool=%q decision=%s authorization_decision=%q reason_code=%q reason=%q hold_token=%q trace_id=%q action_attestation_id=%q session_id=%q",
 		phase,
 		toolName,
 		decision.Decision,
@@ -231,6 +267,7 @@ func (t *Tracer) logDecision(toolName, traceID string, decision EnforcementDecis
 		decision.Reason,
 		decision.HoldToken,
 		traceID,
+		coalesceNonEmpty(decision.ActionAttestationID, actionAttestationID),
 		t.session.SessionID,
 	)
 }
@@ -290,6 +327,7 @@ func mergeDecisionContext(primary, fallback EnforcementDecision) EnforcementDeci
 	merged.AuthorizationDecision = coalesceNonEmpty(merged.AuthorizationDecision, fallback.AuthorizationDecision)
 	merged.DecisionReasonCode = coalesceNonEmpty(merged.DecisionReasonCode, fallback.DecisionReasonCode)
 	merged.ActionClassification = coalesceNonEmpty(merged.ActionClassification, fallback.ActionClassification)
+	merged.ActionAttestationID = coalesceNonEmpty(merged.ActionAttestationID, fallback.ActionAttestationID)
 	merged.PackID = coalesceNonEmpty(merged.PackID, fallback.PackID)
 	merged.PackVersion = coalesceNonEmpty(merged.PackVersion, fallback.PackVersion)
 	if merged.RuleVersion == 0 {
@@ -346,6 +384,7 @@ func policyViolationFromDecision(toolName, reason string, decision EnforcementDe
 		Receipt:                 cloneMap(decision.Receipt),
 		DecisionEnvelopeVersion: decision.DecisionEnvelopeVersion,
 		EnforcementTraceID:      decision.EnforcementTraceID,
+		ActionAttestationID:     decision.ActionAttestationID,
 		FastMLFeatures:          cloneFloat64Map(decision.FastMLFeatures),
 		ScoreComponents:         cloneMap(decision.ScoreComponents),
 		TopContributors:         cloneMapSlice(decision.TopContributors),
@@ -428,6 +467,13 @@ func resolveEnforcementTraceID(configTraceID, sessionID string) string {
 	return sessionID
 }
 
+func resolveActionAttestationID(configActionAttestationID string) string {
+	if strings.TrimSpace(configActionAttestationID) != "" {
+		return strings.TrimSpace(configActionAttestationID)
+	}
+	return uuid.NewString()
+}
+
 func resolveIdentityBinding(
 	configBinding map[string]any,
 	agentID, tenantID, userID string,
@@ -448,6 +494,28 @@ func resolveIdentityBinding(
 		out["user_id"] = userID
 	}
 	return out
+}
+
+func resolveAuthContext(configAuthContext map[string]any, runtimeIdentity string) map[string]any {
+	out := cloneMap(configAuthContext)
+	runtimeIdentity = strings.TrimSpace(runtimeIdentity)
+	if runtimeIdentity == "" {
+		return out
+	}
+	if out == nil {
+		out = map[string]any{}
+	}
+	if _, exists := out["service_identity"]; !exists {
+		out["service_identity"] = runtimeIdentity
+	}
+	return out
+}
+
+func resolveDelegationContext(configDelegationContext, taskContext map[string]any) map[string]any {
+	if len(configDelegationContext) > 0 {
+		return cloneMap(configDelegationContext)
+	}
+	return cloneMap(taskContext)
 }
 
 func withCurrentToolCall(toolCalls []string, toolName string) []string {
@@ -507,12 +575,14 @@ func (t *Tracer) baseToolMetadata(
 	toolName string,
 	toolArgs map[string]any,
 	enforcementTraceID string,
+	actionAttestationID string,
 	environment string,
 ) map[string]any {
 	metadata := map[string]any{
-		"sdk_language":         "go",
-		"environment":          environment,
-		"enforcement_trace_id": enforcementTraceID,
+		"sdk_language":          "go",
+		"environment":           environment,
+		"enforcement_trace_id":  enforcementTraceID,
+		"action_attestation_id": actionAttestationID,
 		"tool_call": map[string]any{
 			"name":      toolName,
 			"arguments": toolArgs,
@@ -529,6 +599,33 @@ func (t *Tracer) baseToolMetadata(
 	if len(t.cfg.TaskContext) > 0 {
 		metadata["task_context"] = cloneMap(t.cfg.TaskContext)
 		metadata["delegation_context"] = cloneMap(t.cfg.TaskContext)
+	}
+	if strings.TrimSpace(t.cfg.ModelName) != "" {
+		metadata["model_name"] = strings.TrimSpace(t.cfg.ModelName)
+	}
+	if strings.TrimSpace(t.cfg.ModelProvider) != "" {
+		metadata["model_provider"] = strings.TrimSpace(t.cfg.ModelProvider)
+	}
+	if strings.TrimSpace(t.cfg.ModelArtifactID) != "" {
+		metadata["model_artifact_id"] = strings.TrimSpace(t.cfg.ModelArtifactID)
+	}
+	if strings.TrimSpace(t.cfg.ModelArtifactVersion) != "" {
+		metadata["model_artifact_version"] = strings.TrimSpace(t.cfg.ModelArtifactVersion)
+	}
+	if len(t.cfg.AuthContext) > 0 {
+		metadata["auth_context"] = cloneMap(t.cfg.AuthContext)
+	}
+	if len(t.cfg.DelegationContext) > 0 {
+		metadata["delegation_context"] = cloneMap(t.cfg.DelegationContext)
+	}
+	if strings.TrimSpace(t.cfg.MCPRuntimeIdentity) != "" {
+		metadata["mcp_runtime_identity"] = strings.TrimSpace(t.cfg.MCPRuntimeIdentity)
+	}
+	for key, value := range t.cfg.RequestMetadata {
+		if _, exists := metadata[key]; exists {
+			continue
+		}
+		metadata[key] = value
 	}
 	return metadata
 }
@@ -550,6 +647,9 @@ func decisionMetadata(decision *EnforcementDecision) map[string]any {
 	}
 	if decision.ActionClassification != "" {
 		metadata["action_classification"] = decision.ActionClassification
+	}
+	if decision.ActionAttestationID != "" {
+		metadata["action_attestation_id"] = decision.ActionAttestationID
 	}
 	if decision.DeferTimeoutSeconds > 0 {
 		metadata["defer_timeout_seconds"] = decision.DeferTimeoutSeconds

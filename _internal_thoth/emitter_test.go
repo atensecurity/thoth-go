@@ -13,7 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
-	"github.com/atensecurity/thoth-go/_internal_thoth"
+	thoth "github.com/atensecurity/thoth-go/_internal_thoth"
 )
 
 type mockBatchSender struct {

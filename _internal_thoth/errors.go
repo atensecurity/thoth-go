@@ -25,6 +25,7 @@ type PolicyViolationError struct {
 	Receipt                 map[string]any
 	DecisionEnvelopeVersion string
 	EnforcementTraceID      string
+	ActionAttestationID     string
 	FastMLFeatures          map[string]float64
 	ScoreComponents         map[string]any
 	TopContributors         []map[string]any

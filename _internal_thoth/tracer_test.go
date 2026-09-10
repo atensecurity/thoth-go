@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/atensecurity/thoth-go/_internal_thoth"
+	thoth "github.com/atensecurity/thoth-go/_internal_thoth"
 )
 
 const toolResultOK = "ok"
@@ -18,8 +18,9 @@ const testReadInvoicesTool = "read_invoices"
 const testUserID = "user_1"
 
 type tracedEnforceRequest struct {
-	ToolName         string   `json:"tool_name"`
-	SessionToolCalls []string `json:"session_tool_calls"`
+	ToolName            string   `json:"tool_name"`
+	SessionToolCalls    []string `json:"session_tool_calls"`
+	ActionAttestationID string   `json:"action_attestation_id"`
 }
 
 type captureEmitter struct {
@@ -291,6 +292,9 @@ func TestWrapTool_EnforcePayloadIncludesCurrentToolCall(t *testing.T) {
 	}
 	if len(got.SessionToolCalls) != 1 || got.SessionToolCalls[0] != testReadInvoicesTool {
 		t.Fatalf("session_tool_calls = %v, want [%s]", got.SessionToolCalls, testReadInvoicesTool)
+	}
+	if got.ActionAttestationID == "" {
+		t.Fatal("action_attestation_id should not be empty")
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/atensecurity/thoth-go/_internal_thoth"
+	thoth "github.com/atensecurity/thoth-go/_internal_thoth"
 )
 
 // testAgent has exported methods that match ToolFunc and one that doesn't.

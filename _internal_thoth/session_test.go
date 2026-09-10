@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/atensecurity/thoth-go/_internal_thoth"
+	thoth "github.com/atensecurity/thoth-go/_internal_thoth"
 )
 
 func TestSessionContext_RecordToolCall(t *testing.T) {

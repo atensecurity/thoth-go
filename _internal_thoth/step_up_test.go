@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/atensecurity/thoth-go/_internal_thoth"
+	thoth "github.com/atensecurity/thoth-go/_internal_thoth"
 )
 
 func makeStepUpServer(t *testing.T, allowAfter time.Duration) *httptest.Server {
