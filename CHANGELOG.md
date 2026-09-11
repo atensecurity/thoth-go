@@ -2,6 +2,34 @@
 
 All notable changes to `thoth-go` are documented in this file.
 
+## 0.1.19 - 2026-09-11
+
+### Added
+
+- Added a per-action attestation ID, generated for each tool call unless the
+  caller supplies one, and propagated it through enforcement decisions,
+  behavioral events, logs, and policy errors for deterministic correlation.
+- Added model name/provider/artifact context, authentication and delegation
+  context, MCP runtime identity, and caller metadata to authorization requests.
+- Added public process-local delivery status and bounded shutdown APIs.
+
+### Changed
+
+- Minimized retained HTTP and SQS telemetry with an explicit allowlist. Tool
+  arguments, free-text context, results, errors, explanations, full receipts,
+  and unknown metadata remain available to authorization but are not retained
+  by default.
+- Added bounded HTTP and SQS delivery retries with stable event and FIFO
+  deduplication identifiers. Retrying telemetry never re-executes a governed
+  tool or repeats its authorization decision.
+- Added SQS partial-batch failure handling, process-local delivery counters,
+  bounded shutdown through `CloseWithTimeout`, and a five-second overall HTTP
+  request timeout.
+- Expanded the public decision-envelope compatibility contract and standalone
+  module tests for the new authorization and evidence fields.
+- Documented the telemetry privacy boundary and the limits of process-local
+  delivery status.
+
 ## 0.1.18 - 2026-06-20
 
 ### Changed
