@@ -335,6 +335,9 @@ type Client struct {
 	http    *http.Client
 }
 
+// DeliveryStatus reports process-local telemetry delivery counters.
+type DeliveryStatus = ithoth.DeliveryStatus
+
 // NewClient initializes a Thoth SDK client.
 func NewClient(cfg Config) (*Client, error) {
 	cfg = applyEnvFallbacks(cfg)
@@ -392,6 +395,27 @@ func (c *Client) Close() {
 	if c.emitter != nil {
 		c.emitter.Close()
 	}
+}
+
+// TelemetryDeliveryStatus returns the current process-local delivery counters.
+// Server persistence and customer-visible acknowledgement require a separate
+// server-side delivery-status integration.
+func (c *Client) TelemetryDeliveryStatus() DeliveryStatus {
+	if reporter, ok := c.emitter.(interface{ Status() ithoth.DeliveryStatus }); ok {
+		return reporter.Status()
+	}
+	return DeliveryStatus{}
+}
+
+// CloseWithTimeout bounds how long the caller waits for telemetry flushing.
+func (c *Client) CloseWithTimeout(timeout time.Duration) DeliveryStatus {
+	if closer, ok := c.emitter.(interface {
+		CloseWithTimeout(time.Duration) ithoth.DeliveryStatus
+	}); ok {
+		return closer.CloseWithTimeout(timeout)
+	}
+	c.Close()
+	return c.TelemetryDeliveryStatus()
 }
 
 func parseJSONMap(raw string) map[string]any {

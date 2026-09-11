@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
 	thoth "github.com/atensecurity/thoth-go/_internal_thoth"
 )
@@ -21,6 +23,7 @@ type mockBatchSender struct {
 	mu      sync.Mutex
 	batches []*sqs.SendMessageBatchInput
 	err     error
+	outputs []*sqs.SendMessageBatchOutput
 }
 
 func sensitiveEvent() *thoth.BehavioralEvent {
@@ -57,6 +60,11 @@ func (m *mockBatchSender) SendMessageBatch(_ context.Context, params *sqs.SendMe
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.batches = append(m.batches, params)
+	if len(m.outputs) > 0 {
+		output := m.outputs[0]
+		m.outputs = m.outputs[1:]
+		return output, nil
+	}
 	return &sqs.SendMessageBatchOutput{}, m.err
 }
 
@@ -110,6 +118,56 @@ func TestEmit_BatchesSentOnClose(t *testing.T) {
 
 	if mock.callCount() == 0 {
 		t.Fatal("expected at least one SendMessageBatch call")
+	}
+}
+
+func TestSQSEmitter_RetriesOnlyFailedEntriesWithStableID(t *testing.T) {
+	mock := &mockBatchSender{outputs: []*sqs.SendMessageBatchOutput{
+		{Failed: []types.BatchResultErrorEntry{{Id: aws.String("1"), SenderFault: false}}},
+		{},
+	}}
+	e := thoth.NewSQSEmitter(context.Background(), "https://sqs.example/queue.fifo", mock)
+	first, second := newTestEvent(), newTestEvent()
+	second.EventID = "tenant-1:stable-second"
+	e.Emit(first)
+	e.Emit(second)
+	e.Close()
+
+	if len(mock.batches) != 2 || len(mock.batches[0].Entries) != 2 || len(mock.batches[1].Entries) != 1 {
+		t.Fatalf("expected batch sizes [2,1], got %#v", mock.batches)
+	}
+	if *mock.batches[0].Entries[1].MessageDeduplicationId != *mock.batches[1].Entries[0].MessageDeduplicationId {
+		t.Fatal("retry changed event deduplication ID")
+	}
+	status := e.Status()
+	if status.Delivered != 2 || status.Dropped != 0 || status.Retried != 1 {
+		t.Fatalf("unexpected delivery status: %+v", status)
+	}
+}
+
+func TestHTTPEmitter_RetriesTransientFailureWithStableID(t *testing.T) {
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(payload))
+		if len(bodies) < 3 {
+			http.Error(w, "temporary", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	event := newTestEvent()
+	e := thoth.NewHTTPEmitter(server.URL, "test-key")
+	e.Emit(event)
+	e.Close()
+
+	if len(bodies) != 3 || bodies[0] != bodies[1] || bodies[1] != bodies[2] {
+		t.Fatalf("expected three identical attempts, got %d", len(bodies))
+	}
+	status := e.Status()
+	if status.Delivered != 1 || status.Dropped != 0 || status.Retried != 2 {
+		t.Fatalf("unexpected delivery status: %+v", status)
 	}
 }
 

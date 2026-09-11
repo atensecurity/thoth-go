@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDecisionLogOmitsReasonAndHoldToken(t *testing.T) {
@@ -27,5 +28,13 @@ func TestDecisionLogOmitsReasonAndHoldToken(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "approval_required") || !strings.Contains(rendered, "action-safe-001") {
 		t.Fatalf("decision log lost safe evidence: %s", rendered)
+	}
+}
+
+func TestHTTPEmitterHasOverallTimeout(t *testing.T) {
+	emitter := NewHTTPEmitter("https://example.test", "test-key")
+	defer emitter.CloseWithTimeout(time.Millisecond)
+	if emitter.http.Timeout != httpEmitterTimeout || emitter.http.Timeout <= 0 {
+		t.Fatalf("HTTP timeout = %v, want %v", emitter.http.Timeout, httpEmitterTimeout)
 	}
 }
