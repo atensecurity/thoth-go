@@ -103,7 +103,7 @@ func (e *SQSEmitter) collectBatch() []*BehavioralEvent {
 func (e *SQSEmitter) sendBatch(ctx context.Context, events []*BehavioralEvent) {
 	entries := make([]types.SendMessageBatchRequestEntry, 0, len(events))
 	for i, ev := range events {
-		body, err := json.Marshal(ev)
+		body, err := json.Marshal(minimalTelemetryEvent(ev))
 		if err != nil {
 			slog.Error("thoth: failed to marshal event; dropping event", "event_id", ev.EventID, "err", err, "dropped", true)
 			continue
@@ -208,9 +208,13 @@ func (e *HTTPEmitter) collectBatch() []*BehavioralEvent {
 }
 
 func (e *HTTPEmitter) sendBatch(events []*BehavioralEvent) {
+	projected := make([]telemetryEvent, 0, len(events))
+	for _, event := range events {
+		projected = append(projected, minimalTelemetryEvent(event))
+	}
 	payload := struct {
-		Events []*BehavioralEvent `json:"events"`
-	}{Events: events}
+		Events []telemetryEvent `json:"events"`
+	}{Events: projected}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -256,7 +260,6 @@ func (e *HTTPEmitter) sendBatch(events []*BehavioralEvent) {
 			"status", resp.StatusCode,
 			"status_text", resp.Status,
 			"url", e.endpoint,
-			"response_body", errBody,
 			"hint", hint,
 			"count", len(events),
 			"dropped", true,

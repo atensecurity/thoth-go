@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,36 @@ type mockBatchSender struct {
 	mu      sync.Mutex
 	batches []*sqs.SendMessageBatchInput
 	err     error
+}
+
+func sensitiveEvent() *thoth.BehavioralEvent {
+	const canary = "SYNTHETIC-PHI-SECRET-4471"
+	event := thoth.NewBehavioralEvent(thoth.BehavioralEventInput{
+		AgentID: "agent-safe-001", TenantID: "tenant-safe-001", SessionID: "session-safe-001",
+		UserID: "user-safe-001", Purpose: canary, DataClassification: canary,
+		TaskContext: map[string]any{"patient": canary}, InitiatedBy: canary, TaskID: canary,
+		DelegationChain: []string{canary}, SourceType: thoth.SourceAgentToolCall,
+		EventType: thoth.EventToolCallBlock, ToolName: "read_document", Content: canary,
+		ApprovedScope: []string{"read_document"}, EnforcementMode: thoth.Block,
+		Metadata: map[string]any{
+			"sdk_language": "go", "environment": "dev", "authorization_decision": "BLOCK",
+			"decision_reason_code": "policy_block", "enforcement_trace_id": "trace-safe-001",
+			"action_attestation_id": "action-safe-001", "tool_args": map[string]any{"path": canary},
+			"error": canary, "human_explanation": map[string]any{"summary": canary},
+			"receipt": map[string]any{
+				"receipt_id": "receipt-safe-001", "signature": "signature-safe-001",
+				"signing_algorithm": "ED25519", "audit_envelope": map[string]any{"patient": canary},
+				"decision": map[string]any{"authorization_decision": "BLOCK", "reason": canary, "outcome": "blocked"},
+			},
+			"decision_evidence": map[string]any{
+				"decision_reason_code": "policy_block", "authorization_decision": "BLOCK",
+				"risk_score": 91.5,
+				"policy":     map[string]any{"matched_rule_ids": []string{"rule-safe-001"}, "explanation": canary},
+			},
+		},
+	})
+	event.EventID = "tenant-safe-001:event-safe-001"
+	return &event
 }
 
 func (m *mockBatchSender) SendMessageBatch(_ context.Context, params *sqs.SendMessageBatchInput, _ ...func(*sqs.Options)) (*sqs.SendMessageBatchOutput, error) {
@@ -223,6 +254,52 @@ func TestHTTPEmitter_SendsDualAuthHeaders(t *testing.T) {
 	events, ok := decoded["events"].([]any)
 	if !ok || len(events) != 1 {
 		t.Fatalf("expected single event payload, got: %#v", decoded["events"])
+	}
+}
+
+func TestHTTPEmitter_UsesMinimalTelemetryProjection(t *testing.T) {
+	var body string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, _ := io.ReadAll(r.Body)
+		body = string(payload)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	event := sensitiveEvent()
+	e := thoth.NewHTTPEmitter(server.URL, "test-key")
+	e.Emit(event)
+	e.Close()
+
+	if strings.Contains(body, "SYNTHETIC-PHI-SECRET-4471") {
+		t.Fatalf("serialized telemetry leaked canary: %s", body)
+	}
+	if !strings.Contains(body, `"event_id":"tenant-safe-001:event-safe-001"`) ||
+		!strings.Contains(body, `"receipt_id":"receipt-safe-001"`) ||
+		!strings.Contains(body, `"matched_rule_ids":["rule-safe-001"]`) {
+		t.Fatalf("serialized telemetry lost decision identifiers/evidence: %s", body)
+	}
+	if event.TaskContext["patient"] != "SYNTHETIC-PHI-SECRET-4471" {
+		t.Fatal("telemetry projection mutated the authorization event")
+	}
+}
+
+func TestSQSEmitter_UsesMinimalTelemetryProjection(t *testing.T) {
+	mock := &mockBatchSender{}
+	event := sensitiveEvent()
+	e := thoth.NewSQSEmitter(context.Background(), "https://sqs.example/queue.fifo", mock)
+	e.Emit(event)
+	e.Close()
+
+	if len(mock.batches) != 1 || len(mock.batches[0].Entries) != 1 {
+		t.Fatalf("expected one SQS entry, got %#v", mock.batches)
+	}
+	body := *mock.batches[0].Entries[0].MessageBody
+	if strings.Contains(body, "SYNTHETIC-PHI-SECRET-4471") {
+		t.Fatalf("serialized telemetry leaked canary: %s", body)
+	}
+	if !strings.Contains(body, `"action_attestation_id":"action-safe-001"`) {
+		t.Fatalf("serialized telemetry lost action identifier: %s", body)
 	}
 }
 

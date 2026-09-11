@@ -258,14 +258,12 @@ func (t *Tracer) logDecision(
 	}
 
 	log.Printf(
-		"thoth: %s decision tool=%q decision=%s authorization_decision=%q reason_code=%q reason=%q hold_token=%q trace_id=%q action_attestation_id=%q session_id=%q",
+		"thoth: %s decision tool=%q decision=%s authorization_decision=%q reason_code=%q trace_id=%q action_attestation_id=%q session_id=%q",
 		phase,
 		toolName,
 		decision.Decision,
 		decision.AuthorizationDecision,
 		decision.DecisionReasonCode,
-		decision.Reason,
-		decision.HoldToken,
 		traceID,
 		coalesceNonEmpty(decision.ActionAttestationID, actionAttestationID),
 		t.session.SessionID,
