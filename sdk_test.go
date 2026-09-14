@@ -584,6 +584,56 @@ func TestWrapToolEnforcerDown(t *testing.T) {
 	}
 }
 
+// Backend-unavailability decisions are authoritative HTTP 200 responses, not
+// transport failures eligible for the client's fail-open fallback.
+func TestWrapToolBackendUnavailableBlockNeverFailsOpen(t *testing.T) {
+	for _, reason := range []string{"policy_backend_unavailable", "tenant_compliance_backend_unavailable"} {
+		for _, mode := range []struct {
+			name     string
+			failOpen bool
+		}{{"fail_closed", false}, {"fail_open", true}} {
+			t.Run(reason+"/"+mode.name, func(t *testing.T) {
+				srv := mockEnforcer(t, enforcerResponse{
+					Decision:              "BLOCK",
+					AuthorizationDecision: "DENY",
+					DecisionReasonCode:    reason,
+					Reason:                reason,
+				})
+				defer srv.Close()
+				client, err := sdk.NewClient(sdk.Config{
+					APIURL:      srv.URL,
+					APIKey:      "test-key",
+					TenantID:    "test-tenant",
+					AgentID:     "test-agent",
+					Timeout:     2 * time.Second,
+					FailOpen:    mode.failOpen,
+					Enforcement: "block",
+				})
+				if err != nil {
+					t.Fatalf("NewClient: %v", err)
+				}
+				defer client.Close()
+				called := false
+				tool := client.WrapTool("restricted_tool", func(_ context.Context, _ string) (string, error) {
+					called = true
+					return "executed", nil
+				})
+				_, err = tool(context.Background(), "payload")
+				if called {
+					t.Fatal("HTTP 200 BLOCK must not execute the wrapped tool")
+				}
+				var violation *sdk.PolicyViolationError
+				if !errors.As(err, &violation) {
+					t.Fatalf("expected *PolicyViolationError, got %T: %v", err, err)
+				}
+				if violation.Reason != reason || violation.DecisionReasonCode != reason {
+					t.Fatalf("reason/code = %q/%q, want %q", violation.Reason, violation.DecisionReasonCode, reason)
+				}
+			})
+		}
+	}
+}
+
 func TestWrapToolEnforcerDownFailOpen(t *testing.T) {
 	client, err := sdk.NewClient(sdk.Config{
 		APIURL:      "http://127.0.0.1:19999", // nothing listening here
