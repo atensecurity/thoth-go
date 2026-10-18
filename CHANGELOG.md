@@ -2,6 +2,24 @@
 
 All notable changes to `thoth-go` are documented in this file.
 
+## 0.1.20 - 2026-10-18
+
+### Added
+
+- Tool inventory: `RegisterToolInventory` sends tool names, descriptions and
+  input-schema structure to your Thoth API, so Thoth can propose an effect
+  class for an admin to confirm. Instrumenting a tool map reports the tool
+  names from a goroutine, off the startup path, with a 2-second timeout.
+  Proposals are advisory: they never grant execution, and only an admin's
+  confirmation changes decisions.
+
+### Privacy
+
+- Schema `default`, `example`, `examples`, `const` and `enum` values are
+  removed recursively before sending; parameters with those names are kept.
+  Descriptions are sent as written, so keep secrets out of tool metadata.
+- Set `THOTH_TOOL_INVENTORY=off` to disable collection.
+
 ## 0.1.19 - 2026-09-11
 
 ### Added
