@@ -14,7 +14,7 @@ Set these environment variables (or pass equivalent fields in `thoth.Config`):
 
 ```bash
 export THOTH_API_KEY="thoth_live_..."
-export THOTH_API_URL="https://enforce.<tenant>.<apex-domain>"
+export THOTH_API_URL="https://api.atensecurity.com" # optional: trial and self-serve default; Enterprise: your enforce. host
 export THOTH_TENANT_ID="<tenant>"
 export THOTH_AGENT_ID="invoice-processor-v2"
 ```
@@ -31,7 +31,9 @@ export THOTH_FAIL_OPEN="false" # optional; true allows on enforcer network/429/5
 export THOTH_LOG_LEVEL="DEBUG" # optional; falls back to LOG_LEVEL when unset
 ```
 
-`THOTH_API_URL` is required. The SDK uses this single URL for both:
+`THOTH_API_URL` defaults to `https://api.atensecurity.com`, the API for trial and
+self-serve workspaces. Enterprise workspaces set their own host. The SDK uses
+this single URL for both:
 
 - `POST /v1/enforce`
 - `POST /v1/events/batch`

@@ -2,6 +2,15 @@
 
 All notable changes to `thoth-go` are documented in this file.
 
+## Unreleased
+
+### Changed
+
+- `Config.APIURL` defaults to `DefaultAPIURL` (`https://api.atensecurity.com`),
+  the API for trial and self-serve workspaces, when neither `Config.APIURL` nor
+  `THOTH_API_URL` is set. Previously `NewClient` returned an error. Enterprise
+  workspaces keep setting their own host; an explicit value always wins.
+
 ## 0.1.20 - 2026-10-18
 
 ### Added

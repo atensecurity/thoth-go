@@ -220,7 +220,8 @@ func TestNewClientFromEnv_UsesTHOTHEnforcementModeFallback(t *testing.T) {
 	}
 }
 
-// TestNewClientFromEnv_EmptyEnv verifies NewClient fails when APIURL is missing.
+// TestNewClientFromEnv_EmptyEnv verifies NewClient falls back to the trial and
+// self-serve API when neither Config.APIURL nor THOTH_API_URL is set.
 func TestNewClientFromEnv_EmptyEnv(t *testing.T) {
 	// Unset all Thoth env vars to ensure a clean state.
 	for _, key := range []string{
@@ -231,12 +232,12 @@ func TestNewClientFromEnv_EmptyEnv(t *testing.T) {
 	}
 
 	client, err := sdk.NewClient(sdk.Config{})
-	if err == nil {
-		client.Close()
-		t.Fatal("NewClient with empty config: expected error, got nil")
+	if err != nil {
+		t.Fatalf("NewClient with empty config: %v", err)
 	}
-	if !strings.Contains(err.Error(), "APIURL is required") {
-		t.Fatalf("NewClient with empty config: unexpected error: %v", err)
+	client.Close()
+	if sdk.DefaultAPIURL != "https://api.atensecurity.com" {
+		t.Fatalf("DefaultAPIURL = %q", sdk.DefaultAPIURL)
 	}
 }
 

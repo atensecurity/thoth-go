@@ -31,7 +31,7 @@
 //	THOTH_EVENT_INGEST_TOKEN — optional dedicated token for /v1/events/batch
 //	THOTH_TENANT_ID  — tenant identifier
 //	THOTH_AGENT_ID   — agent identifier
-//	THOTH_API_URL    — unified tenant API base URL override (enforcement + events)
+//	THOTH_API_URL    — tenant API base URL (enforcement + events); default https://api.atensecurity.com
 //	THOTH_ENV        — environment scope (default: prod)
 //	THOTH_ENVIRONMENT — alternate environment scope key (default: prod)
 //	THOTH_ENFORCEMENT_MODE — enforcement mode override (default: block)
@@ -90,10 +90,10 @@ type Config struct {
 	// Env fallback: THOTH_AGENT_ID.
 	AgentID string
 
-	// APIURL overrides the Thoth API base URL.
-	// Required (directly or via THOTH_API_URL). This single URL is used for
+	// APIURL overrides the Thoth API base URL. This single URL is used for
 	// both policy enforcement (/v1/enforce) and event ingestion (/v1/events/batch).
-	// Env fallback: THOTH_API_URL.
+	// Env fallback: THOTH_API_URL, then DefaultAPIURL. Enterprise workspaces
+	// set their own host.
 	APIURL string
 
 	// Environment scopes policy lookup (for example, dev vs prod).
@@ -208,6 +208,9 @@ func applyEnvFallbacks(cfg Config) Config {
 	}
 	if cfg.APIURL == "" {
 		cfg.APIURL = os.Getenv("THOTH_API_URL")
+	}
+	if cfg.APIURL == "" {
+		cfg.APIURL = DefaultAPIURL
 	}
 	if cfg.Environment == "" {
 		cfg.Environment = os.Getenv("THOTH_ENV")
@@ -338,12 +341,13 @@ type Client struct {
 // DeliveryStatus reports process-local telemetry delivery counters.
 type DeliveryStatus = ithoth.DeliveryStatus
 
+// DefaultAPIURL is the API for trial and self-serve workspaces. Enterprise
+// workspaces have their own host and set it with Config.APIURL or THOTH_API_URL.
+const DefaultAPIURL = "https://api.atensecurity.com"
+
 // NewClient initializes a Thoth SDK client.
 func NewClient(cfg Config) (*Client, error) {
 	cfg = applyEnvFallbacks(cfg)
-	if cfg.APIURL == "" {
-		return nil, fmt.Errorf("thoth: APIURL is required (set Config.APIURL or THOTH_API_URL)")
-	}
 	internalCfg := toInternalConfig(cfg)
 	emitter := ithoth.NewHTTPEmitterWithEventIngestToken(
 		internalCfg.APIURL,
