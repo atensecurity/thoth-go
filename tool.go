@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 
@@ -138,7 +137,8 @@ func translateError(err error) error {
 		}
 	}
 
-	log.Printf("thoth: sdk: unhandled internal error type %T: %v", err, err)
+	// Not a Thoth error: the tool's own failure, returned as it came. It is not
+	// logged here, since it can carry URLs, tokens or data from the tool.
 	return err
 }
 

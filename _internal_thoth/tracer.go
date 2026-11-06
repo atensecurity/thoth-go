@@ -28,12 +28,14 @@ type Tracer struct {
 	tools         map[string]ToolFunc
 }
 
-const defaultStepUpTimeout = 30 * time.Second
+// defaultStepUpTimeout matches the Python and TypeScript SDKs: a human approves
+// in Slack or the dashboard, which takes minutes, not seconds.
+const defaultStepUpTimeout = 15 * time.Minute
 
 // NewTracer creates a Tracer wired to the provided config, session, and optional emitter.
 func NewTracer(cfg Config, session *SessionContext, emitter Emitter) *Tracer {
 	cfg = ApplyConfigDefaults(cfg)
-	return &Tracer{
+	t := &Tracer{
 		cfg:           cfg,
 		session:       session,
 		emitter:       emitter,
@@ -42,6 +44,10 @@ func NewTracer(cfg Config, session *SessionContext, emitter Emitter) *Tracer {
 		stepUpTimeout: defaultStepUpTimeout,
 		tools:         make(map[string]ToolFunc),
 	}
+	if cfg.StepUpTimeout > 0 {
+		t.stepUpTimeout = cfg.StepUpTimeout
+	}
+	return t
 }
 
 // NewTracerWithStepUpTimeout creates a Tracer with a custom step-up polling timeout
@@ -194,6 +200,13 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			}
 			effectiveArgs = modifiedArgs
 		case DecisionStepUp:
+			if dec.HoldToken == "" {
+				// Nothing to wait on: refuse now instead of polling an empty token.
+				unresolved := dec
+				unresolved.Reason = coalesceNonEmpty(dec.Reason, "step-up required but the hold token is missing")
+				t.emitBlockEvent(name, unresolved, sessionToolCalls, startedAt, baseMetadata)
+				return nil, policyViolationFromDecision(name, unresolved.Reason, unresolved)
+			}
 			stepCtx, cancel := context.WithTimeout(ctx, t.stepUpTimeout)
 			defer cancel()
 			stepDec := t.stepUp.Wait(stepCtx, dec.HoldToken)

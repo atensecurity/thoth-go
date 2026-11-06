@@ -346,6 +346,10 @@ type Config struct {
 	MCPRuntimeIdentity string
 	// RequestMetadata is optional metadata merged into each enforce payload.
 	RequestMetadata map[string]any
+	// StepUpTimeout is how long a held call waits for approval. Zero means the
+	// default of 15 minutes.
+	StepUpTimeout time.Duration
+
 	// FailOpen allows tool execution when enforcement infrastructure is unavailable
 	// (network error, 429, or 5xx). Auth failures still block.
 	FailOpen bool

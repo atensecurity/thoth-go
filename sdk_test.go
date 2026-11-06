@@ -1,9 +1,11 @@
 package thoth_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1388,5 +1390,101 @@ func TestEnforceAndHoldRequestsSendTheKeyInBothAuthHeaders(t *testing.T) {
 		if got.bearer != "Bearer test-key" || got.apiKey != "test-key" {
 			t.Errorf("%s sent Authorization=%q X-Api-Key=%q, want both set to the key", name, got.bearer, got.apiKey)
 		}
+	}
+}
+
+func TestWrapToolStepUp_MissingHoldTokenIsRefusedWithoutPolling(t *testing.T) {
+	holdPolls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/v1/enforce/hold/") {
+			holdPolls++
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "STEP_UP", Reason: "needs approval"})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	ran := false
+	risky := client.WrapTool("risky_op", func(_ context.Context, _ string) (string, error) {
+		ran = true
+		return "done", nil
+	})
+
+	started := time.Now()
+	_, err := risky(context.Background(), "input")
+
+	var pve *sdk.PolicyViolationError
+	if !errors.As(err, &pve) {
+		t.Fatalf("expected *PolicyViolationError, got %T: %v", err, err)
+	}
+	if ran {
+		t.Fatal("the tool ran although the hold had no token")
+	}
+	if holdPolls != 0 {
+		t.Fatalf("polled the hold endpoint %d times for an empty token", holdPolls)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("refusal took %v, want it immediate", elapsed)
+	}
+}
+
+func TestConfigStepUpTimeoutBoundsTheWaitForApproval(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/v1/enforce/hold/") {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "STEP_UP", HoldToken: "tok-pending"})
+	}))
+	defer srv.Close()
+
+	client, err := sdk.NewClient(sdk.Config{
+		APIURL:        srv.URL,
+		APIKey:        "test-key",
+		TenantID:      "test-tenant",
+		AgentID:       "test-agent",
+		Timeout:       time.Second,
+		StepUpTimeout: 150 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+	risky := client.WrapTool("risky_op", func(_ context.Context, _ string) (string, error) { return "done", nil })
+
+	started := time.Now()
+	_, err = risky(context.Background(), "input")
+
+	var pve *sdk.PolicyViolationError
+	if !errors.As(err, &pve) {
+		t.Fatalf("expected *PolicyViolationError, got %T: %v", err, err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("waited %v, want about the configured 150ms", elapsed)
+	}
+}
+
+func TestWrapToolDoesNotLogTheToolsOwnError(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{Decision: "ALLOW"})
+	defer srv.Close()
+	client := newTestClient(t, srv.URL)
+
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+
+	run := client.WrapTool("fetch", func(_ context.Context, _ string) (string, error) {
+		return "", errors.New("GET https://internal.example/?token=sk-secret-123 failed")
+	})
+	if _, err := run(context.Background(), "input"); err == nil {
+		t.Fatal("expected the tool's error to be returned")
+	}
+
+	if strings.Contains(logged.String(), "sk-secret-123") {
+		t.Fatalf("the tool's error text was logged: %s", logged.String())
 	}
 }

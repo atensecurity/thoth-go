@@ -27,6 +27,16 @@ All notable changes to `thoth-go` are documented in this file.
   `Authorization: Bearer`, as event ingestion already does. The SDK sent only
   Bearer, so behind an ingress that strips `Authorization` every call was
   blocked.
+- A held call now waits up to 15 minutes for approval, as the Python and
+  TypeScript SDKs do. The wait was fixed at 30 seconds with no way to change it,
+  so a person approving in Slack or the dashboard a minute later found the call
+  already blocked. Set `Config.StepUpTimeout` for a different limit (a shorter
+  one suits unattended jobs).
+- A step-up decision with no hold token is refused at once, instead of polling
+  an empty token for the whole wait before blocking.
+- The SDK no longer writes your tool's own errors to the process log. Errors
+  that are not Thoth's are returned as they came, and a tool error can carry
+  URLs, tokens or data.
 - A call the enforcer allows with its arguments redacted or filtered (outbound
   DLP redaction, or purpose-limited retrieval) now runs with the modified
   arguments. The enforcer sends that as `decision` ALLOW next to

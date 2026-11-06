@@ -183,6 +183,11 @@ type Config struct {
 	// Timeout is the HTTP timeout for enforcer calls. Default: 5s.
 	Timeout time.Duration
 
+	// StepUpTimeout is how long a held call waits for a human to approve or
+	// deny it before it is blocked. Default: 15m (the Python and TypeScript SDKs'
+	// default). Set a shorter value for unattended jobs.
+	StepUpTimeout time.Duration
+
 	// Enforcement controls how policy violations are handled.
 	// Default: "block".
 	Enforcement string
@@ -323,6 +328,7 @@ func toInternalConfig(cfg Config) ithoth.Config {
 		MCPRuntimeIdentity:   cfg.MCPRuntimeIdentity,
 		RequestMetadata:      cfg.RequestMetadata,
 		FailOpen:             cfg.FailOpen,
+		StepUpTimeout:        cfg.StepUpTimeout,
 		EnforcementTraceID:   cfg.EnforcementTraceID,
 		ActionAttestationID:  cfg.ActionAttestationID,
 	}
