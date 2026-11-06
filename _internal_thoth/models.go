@@ -186,36 +186,42 @@ func ensureContent(content string, eventType EventType) string {
 
 // EnforcementDecision is the response from the enforcer service.
 type EnforcementDecision struct {
-	Decision                DecisionType       `json:"decision"`
-	AuthorizationDecision   string             `json:"authorization_decision,omitempty"`
-	DecisionReasonCode      string             `json:"decision_reason_code,omitempty"`
-	ActionClassification    string             `json:"action_classification,omitempty"`
-	ActionAttestationID     string             `json:"action_attestation_id,omitempty"`
-	Reason                  string             `json:"reason,omitempty"`
-	ViolationID             string             `json:"violation_id,omitempty"`
-	HoldToken               string             `json:"hold_token,omitempty"`
-	RiskScore               float64            `json:"risk_score,omitempty"`
-	LatencyMs               float64            `json:"latency_ms,omitempty"`
-	PackID                  string             `json:"pack_id,omitempty"`
-	PackVersion             string             `json:"pack_version,omitempty"`
-	RuleVersion             int                `json:"rule_version,omitempty"`
-	RegulatoryRegimes       []string           `json:"regulatory_regimes,omitempty"`
-	MatchedRuleIDs          []string           `json:"matched_rule_ids,omitempty"`
-	MatchedControlIDs       []string           `json:"matched_control_ids,omitempty"`
-	PolicyReferences        []string           `json:"policy_references,omitempty"`
-	ModelSignals            []string           `json:"model_signals,omitempty"`
-	Receipt                 map[string]any     `json:"receipt,omitempty"`
-	ModifiedToolArgs        map[string]any     `json:"modified_tool_args,omitempty"`
-	ModificationReason      string             `json:"modification_reason,omitempty"`
-	DeferReason             string             `json:"defer_reason,omitempty"`
-	DeferTimeoutSeconds     int                `json:"defer_timeout_seconds,omitempty"`
-	StepUpTimeoutSeconds    int                `json:"step_up_timeout_seconds,omitempty"`
-	DecisionEnvelopeVersion string             `json:"decision_envelope_version,omitempty"`
-	EnforcementTraceID      string             `json:"enforcement_trace_id,omitempty"`
-	FastMLFeatures          map[string]float64 `json:"fastml_features,omitempty"`
-	ScoreComponents         map[string]any     `json:"score_components,omitempty"`
-	TopContributors         []map[string]any   `json:"top_contributors,omitempty"`
-	DecisionEvidence        map[string]any     `json:"decision_evidence,omitempty"`
+	Decision              DecisionType   `json:"decision"`
+	AuthorizationDecision string         `json:"authorization_decision,omitempty"`
+	DecisionReasonCode    string         `json:"decision_reason_code,omitempty"`
+	ActionClassification  string         `json:"action_classification,omitempty"`
+	ActionAttestationID   string         `json:"action_attestation_id,omitempty"`
+	Reason                string         `json:"reason,omitempty"`
+	ViolationID           string         `json:"violation_id,omitempty"`
+	HoldToken             string         `json:"hold_token,omitempty"`
+	RiskScore             float64        `json:"risk_score,omitempty"`
+	LatencyMs             float64        `json:"latency_ms,omitempty"`
+	PackID                string         `json:"pack_id,omitempty"`
+	PackVersion           string         `json:"pack_version,omitempty"`
+	RuleVersion           int            `json:"rule_version,omitempty"`
+	RegulatoryRegimes     []string       `json:"regulatory_regimes,omitempty"`
+	MatchedRuleIDs        []string       `json:"matched_rule_ids,omitempty"`
+	MatchedControlIDs     []string       `json:"matched_control_ids,omitempty"`
+	PolicyReferences      []string       `json:"policy_references,omitempty"`
+	ModelSignals          []string       `json:"model_signals,omitempty"`
+	Receipt               map[string]any `json:"receipt,omitempty"`
+	// TerminalReceipt is the signed receipt written when a held action is approved or denied.
+	TerminalReceipt          map[string]any     `json:"terminal_receipt,omitempty"`
+	ProfileID                string             `json:"profile_id,omitempty"`
+	ProfileVersion           string             `json:"profile_version,omitempty"`
+	TenantDeclarationsStatus string             `json:"tenant_declarations_status,omitempty"`
+	RiskClassification       map[string]any     `json:"risk_classification,omitempty"`
+	ModifiedToolArgs         map[string]any     `json:"modified_tool_args,omitempty"`
+	ModificationReason       string             `json:"modification_reason,omitempty"`
+	DeferReason              string             `json:"defer_reason,omitempty"`
+	DeferTimeoutSeconds      int                `json:"defer_timeout_seconds,omitempty"`
+	StepUpTimeoutSeconds     int                `json:"step_up_timeout_seconds,omitempty"`
+	DecisionEnvelopeVersion  string             `json:"decision_envelope_version,omitempty"`
+	EnforcementTraceID       string             `json:"enforcement_trace_id,omitempty"`
+	FastMLFeatures           map[string]float64 `json:"fastml_features,omitempty"`
+	ScoreComponents          map[string]any     `json:"score_components,omitempty"`
+	TopContributors          []map[string]any   `json:"top_contributors,omitempty"`
+	DecisionEvidence         map[string]any     `json:"decision_evidence,omitempty"`
 }
 
 // CheckRequest contains all fields needed by the enforcer to produce a policy decision.

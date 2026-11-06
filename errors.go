@@ -45,6 +45,8 @@ type PolicyViolationError struct {
 	ModelSignals []string
 	// Receipt is the decision receipt payload when available.
 	Receipt map[string]any
+	// TerminalReceipt is the signed receipt written when a held action was approved or denied.
+	TerminalReceipt map[string]any
 	// DecisionEnvelopeVersion is the schema version of the decision envelope.
 	DecisionEnvelopeVersion string
 	// EnforcementTraceID is the trace correlation ID returned by the enforcer.

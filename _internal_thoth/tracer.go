@@ -355,6 +355,9 @@ func mergeDecisionContext(primary, fallback EnforcementDecision) EnforcementDeci
 	if len(merged.Receipt) == 0 {
 		merged.Receipt = cloneMap(fallback.Receipt)
 	}
+	if len(merged.TerminalReceipt) == 0 {
+		merged.TerminalReceipt = cloneMap(fallback.TerminalReceipt)
+	}
 	return merged
 }
 
@@ -380,6 +383,7 @@ func policyViolationFromDecision(toolName, reason string, decision EnforcementDe
 		PolicyReferences:        cloneStringSlice(decision.PolicyReferences),
 		ModelSignals:            cloneStringSlice(decision.ModelSignals),
 		Receipt:                 cloneMap(decision.Receipt),
+		TerminalReceipt:         cloneMap(decision.TerminalReceipt),
 		DecisionEnvelopeVersion: decision.DecisionEnvelopeVersion,
 		EnforcementTraceID:      decision.EnforcementTraceID,
 		ActionAttestationID:     decision.ActionAttestationID,
@@ -687,6 +691,9 @@ func decisionMetadata(decision *EnforcementDecision) map[string]any {
 	}
 	if len(decision.Receipt) > 0 {
 		metadata["receipt"] = cloneMap(decision.Receipt)
+	}
+	if len(decision.TerminalReceipt) > 0 {
+		metadata["terminal_receipt"] = cloneMap(decision.TerminalReceipt)
 	}
 	return metadata
 }

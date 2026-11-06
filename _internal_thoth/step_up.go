@@ -37,6 +37,10 @@ type holdStatusResponse struct {
 	PolicyReferences      []string       `json:"policy_references,omitempty"`
 	ModelSignals          []string       `json:"model_signals,omitempty"`
 	Receipt               map[string]any `json:"receipt,omitempty"`
+	InitialReceipt        map[string]any `json:"initial_receipt,omitempty"`
+	TerminalReceipt       map[string]any `json:"terminal_receipt,omitempty"`
+	ToolName              string         `json:"tool_name,omitempty"`
+	ApprovalURL           string         `json:"approval_url,omitempty"`
 	Resolved              bool           `json:"resolved"`
 	Resolution            DecisionType   `json:"resolution,omitempty"`
 }
@@ -71,8 +75,9 @@ func (c *StepUpClient) PollInterval() time.Duration {
 func (c *StepUpClient) Wait(ctx context.Context, holdToken string) EnforcementDecision {
 	ticker := time.NewTicker(c.pollInterval)
 	defer ticker.Stop()
+	noticed := false
 	for {
-		if dec, ok := c.poll(ctx, holdToken); ok {
+		if dec, ok := c.poll(ctx, holdToken, &noticed); ok {
 			return dec
 		}
 		select {
@@ -83,7 +88,7 @@ func (c *StepUpClient) Wait(ctx context.Context, holdToken string) EnforcementDe
 	}
 }
 
-func (c *StepUpClient) poll(ctx context.Context, holdToken string) (EnforcementDecision, bool) {
+func (c *StepUpClient) poll(ctx context.Context, holdToken string, noticed *bool) (EnforcementDecision, bool) {
 	url := fmt.Sprintf("%s/v1/enforce/hold/%s", c.baseURL, holdToken)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -147,6 +152,14 @@ func (c *StepUpClient) poll(ctx context.Context, holdToken string) (EnforcementD
 		}
 	}
 
+	if hold.ApprovalURL != "" && !*noticed {
+		*noticed = true
+		tool := hold.ToolName
+		if tool == "" {
+			tool = "this action"
+		}
+		log.Printf("thoth: %s is waiting for approval. Approve or deny it at %s", tool, hold.ApprovalURL)
+	}
 	return EnforcementDecision{}, false
 }
 
@@ -169,6 +182,16 @@ func decisionFromHold(hold holdStatusResponse, decision DecisionType) Enforcemen
 		MatchedControlIDs:     cloneStringSlice(hold.MatchedControlIDs),
 		PolicyReferences:      cloneStringSlice(hold.PolicyReferences),
 		ModelSignals:          cloneStringSlice(hold.ModelSignals),
-		Receipt:               cloneMap(hold.Receipt),
+		Receipt:               cloneMap(firstNonEmptyMap(hold.Receipt, hold.InitialReceipt)),
+		TerminalReceipt:       cloneMap(hold.TerminalReceipt),
 	}
+}
+
+func firstNonEmptyMap(maps ...map[string]any) map[string]any {
+	for _, m := range maps {
+		if len(m) > 0 {
+			return m
+		}
+	}
+	return nil
 }

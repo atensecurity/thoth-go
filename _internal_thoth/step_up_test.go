@@ -168,3 +168,35 @@ func TestStepUpClient_ParsesHoldTokenResolutionBlock(t *testing.T) {
 		t.Fatalf("Decision = %q, want BLOCK", dec.Decision)
 	}
 }
+
+func TestStepUpClient_CarriesTheHoldReceipts(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if n == 1 {
+			_, _ = w.Write([]byte(`{"resolved":false,"tool_name":"email.send","approval_url":"https://app.example/approvals/ap_1"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"resolved":true,"resolution":"ALLOW","initial_receipt":{"decision_id":"d1"},"terminal_receipt":{"decision_id":"d2"}}`))
+	}))
+	defer srv.Close()
+
+	client := thoth.NewStepUpClient(srv.URL, "", 10*time.Millisecond)
+	dec := client.Wait(context.Background(), "hold-token-1")
+
+	if dec.Decision != thoth.DecisionAllow {
+		t.Fatalf("Decision = %q, want ALLOW", dec.Decision)
+	}
+	if dec.Receipt["decision_id"] != "d1" {
+		t.Errorf("Receipt = %v, want the initial receipt", dec.Receipt)
+	}
+	if dec.TerminalReceipt["decision_id"] != "d2" {
+		t.Errorf("TerminalReceipt = %v, want the terminal receipt", dec.TerminalReceipt)
+	}
+}

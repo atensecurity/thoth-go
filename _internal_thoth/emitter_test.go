@@ -42,7 +42,7 @@ func sensitiveEvent() *thoth.BehavioralEvent {
 			"error": canary, "human_explanation": map[string]any{"summary": canary},
 			"receipt": map[string]any{
 				"receipt_id": "receipt-safe-001", "signature": "signature-safe-001",
-				"signing_algorithm": "ED25519", "audit_envelope": map[string]any{"patient": canary},
+				"signing_algorithm": "ED25519", "signature_key_id": "key-safe-001", "audit_envelope": map[string]any{"patient": canary},
 				"decision": map[string]any{"authorization_decision": "BLOCK", "reason": canary, "outcome": "blocked"},
 			},
 			"decision_evidence": map[string]any{
@@ -334,6 +334,7 @@ func TestHTTPEmitter_UsesMinimalTelemetryProjection(t *testing.T) {
 	}
 	if !strings.Contains(body, `"event_id":"tenant-safe-001:event-safe-001"`) ||
 		!strings.Contains(body, `"receipt_id":"receipt-safe-001"`) ||
+		!strings.Contains(body, `"signature_key_id":"key-safe-001"`) ||
 		!strings.Contains(body, `"matched_rule_ids":["rule-safe-001"]`) {
 		t.Fatalf("serialized telemetry lost decision identifiers/evidence: %s", body)
 	}

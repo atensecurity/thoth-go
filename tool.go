@@ -128,6 +128,7 @@ func translateError(err error) error {
 			PolicyReferences:        append([]string{}, pve.PolicyReferences...),
 			ModelSignals:            append([]string{}, pve.ModelSignals...),
 			Receipt:                 cloneAnyMap(pve.Receipt),
+			TerminalReceipt:         cloneAnyMap(pve.TerminalReceipt),
 			DecisionEnvelopeVersion: pve.DecisionEnvelopeVersion,
 			EnforcementTraceID:      pve.EnforcementTraceID,
 			FastMLFeatures:          cloneFloat64Map(pve.FastMLFeatures),

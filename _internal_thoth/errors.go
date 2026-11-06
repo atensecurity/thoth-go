@@ -23,6 +23,7 @@ type PolicyViolationError struct {
 	PolicyReferences        []string
 	ModelSignals            []string
 	Receipt                 map[string]any
+	TerminalReceipt         map[string]any
 	DecisionEnvelopeVersion string
 	EnforcementTraceID      string
 	ActionAttestationID     string

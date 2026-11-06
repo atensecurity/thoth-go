@@ -4,6 +4,16 @@ All notable changes to `thoth-go` are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- When a held action is approved or denied, the decision and `PolicyViolationError`
+  carry the signed `TerminalReceipt`, and `Receipt` keeps the receipt written
+  when it was held (it was dropped). While a hold is pending, the SDK logs one
+  line saying where to approve or deny it. `EnforcementDecision` also carries
+  `ProfileID`, `ProfileVersion`, `TenantDeclarationsStatus` and
+  `RiskClassification` when the enforcer returns them. Event telemetry now
+  includes the receipt's `signature_key_id` and the terminal receipt.
+
 ### Fixed
 
 - A call the enforcer allows with its arguments redacted or filtered (outbound

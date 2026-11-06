@@ -62,6 +62,9 @@ func minimalTelemetryEvent(event *BehavioralEvent) telemetryEvent {
 	if receipt := safeReceipt(event.Metadata["receipt"]); receipt != nil {
 		metadata["receipt"] = receipt
 	}
+	if receipt := safeReceipt(event.Metadata["terminal_receipt"]); receipt != nil {
+		metadata["terminal_receipt"] = receipt
+	}
 	if evidence := safeDecisionEvidence(event.Metadata["decision_evidence"]); evidence != nil {
 		metadata["decision_evidence"] = evidence
 	}
@@ -103,7 +106,7 @@ func safeReceipt(value any) map[string]any {
 		return nil
 	}
 	result := map[string]any{}
-	for _, key := range []string{"receipt_id", "decision_id", "signature", "signing_algorithm", "key_id", "schema_version"} {
+	for _, key := range []string{"receipt_id", "decision_id", "signature", "signing_algorithm", "key_id", "signature_key_id", "schema_version"} {
 		if text, ok := source[key].(string); ok {
 			result[key] = text
 		}
