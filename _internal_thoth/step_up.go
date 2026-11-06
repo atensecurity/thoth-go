@@ -97,6 +97,7 @@ func (c *StepUpClient) poll(ctx context.Context, holdToken string, noticed *bool
 	}
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("X-Api-Key", c.apiKey)
 	}
 
 	resp, err := c.http.Do(req)

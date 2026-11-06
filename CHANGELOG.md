@@ -23,6 +23,10 @@ All notable changes to `thoth-go` are documented in this file.
   back onto the call, or one that arrives with no arguments, now returns a
   `PolicyViolationError` instead of running the original arguments, and a tool
   with its own `args` parameter is no longer misread as the positional form.
+- Enforce and hold-status requests send the API key in both `X-Api-Key` and
+  `Authorization: Bearer`, as event ingestion already does. The SDK sent only
+  Bearer, so behind an ingress that strips `Authorization` every call was
+  blocked.
 - A call the enforcer allows with its arguments redacted or filtered (outbound
   DLP redaction, or purpose-limited retrieval) now runs with the modified
   arguments. The enforcer sends that as `decision` ALLOW next to

@@ -1358,3 +1358,35 @@ func TestWrapToolFuncModify_ArgumentNamedArgsIsAParameter(t *testing.T) {
 		t.Fatalf("tool ran with args %v, want the modified parameter", got["args"])
 	}
 }
+
+func TestEnforceAndHoldRequestsSendTheKeyInBothAuthHeaders(t *testing.T) {
+	type seen struct{ bearer, apiKey string }
+	var enforce, hold seen
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		got := seen{bearer: r.Header.Get("Authorization"), apiKey: r.Header.Get("X-Api-Key")}
+		switch {
+		case r.URL.Path == enforcePath:
+			enforce = got
+			_ = json.NewEncoder(w).Encode(enforcerResponse{Decision: "STEP_UP", HoldToken: "tok-1"})
+		case strings.HasPrefix(r.URL.Path, "/v1/enforce/hold/"):
+			hold = got
+			_, _ = w.Write([]byte(`{"resolved":true,"resolution":"ALLOW"}`))
+		default:
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	run := client.WrapTool("op", func(_ context.Context, _ string) (string, error) { return "ok", nil })
+	if _, err := run(context.Background(), "x"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for name, got := range map[string]seen{"enforce": enforce, "hold poll": hold} {
+		if got.bearer != "Bearer test-key" || got.apiKey != "test-key" {
+			t.Errorf("%s sent Authorization=%q X-Api-Key=%q, want both set to the key", name, got.bearer, got.apiKey)
+		}
+	}
+}

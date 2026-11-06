@@ -146,6 +146,7 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("X-Api-Key", c.apiKey)
 	}
 
 	resp, err := c.http.Do(req)
