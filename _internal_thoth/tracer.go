@@ -188,7 +188,11 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			}
 			return nil, policyViolationFromDecision(name, reason, dec)
 		case DecisionModify:
-			effectiveArgs = applyModifiedArgs(args, dec.ModifiedToolArgs)
+			modifiedArgs, ok := applyModifiedArgs(args, dec.ModifiedToolArgs)
+			if !ok {
+				return nil, t.modificationNotApplied(name, dec, sessionToolCalls, startedAt, baseMetadata)
+			}
+			effectiveArgs = modifiedArgs
 		case DecisionStepUp:
 			stepCtx, cancel := context.WithTimeout(ctx, t.stepUpTimeout)
 			defer cancel()
@@ -228,8 +232,19 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 				t.emitBlockEvent(name, unresolved, sessionToolCalls, startedAt, baseMetadata)
 				return nil, policyViolationFromDecision(name, unresolved.Reason, unresolved)
 			}
-			if stepDec.Decision == DecisionModify {
-				effectiveArgs = applyModifiedArgs(args, stepDec.ModifiedToolArgs)
+			// A held call that is approved comes back as a plain ALLOW, so the
+			// arguments the enforcer redacted when it held the call are on the
+			// initial decision.
+			modification := stepDec.ModifiedToolArgs
+			if stepDec.Decision == DecisionAllow && len(dec.ModifiedToolArgs) > 0 {
+				modification = dec.ModifiedToolArgs
+			}
+			if stepDec.Decision == DecisionModify || (stepDec.Decision == DecisionAllow && len(dec.ModifiedToolArgs) > 0) {
+				modifiedArgs, ok := applyModifiedArgs(args, modification)
+				if !ok {
+					return nil, t.modificationNotApplied(name, mergeDecisionContext(stepDec, dec), sessionToolCalls, startedAt, baseMetadata)
+				}
+				effectiveArgs = modifiedArgs
 			}
 		}
 
@@ -244,6 +259,20 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			baseMetadata,
 		)
 	}
+}
+
+// modificationNotApplied refuses a call whose modified arguments the SDK cannot
+// map back onto it, instead of running the original arguments.
+func (t *Tracer) modificationNotApplied(
+	name string,
+	dec EnforcementDecision,
+	sessionToolCalls []string,
+	startedAt time.Time,
+	baseMetadata map[string]any,
+) error {
+	dec.Reason = "modified arguments could not be applied; the call was not run"
+	t.emitBlockEvent(name, dec, sessionToolCalls, startedAt, baseMetadata)
+	return policyViolationFromDecision(name, dec.Reason, dec)
 }
 
 func (t *Tracer) logDecision(
@@ -394,23 +423,29 @@ func policyViolationFromDecision(toolName, reason string, decision EnforcementDe
 	}
 }
 
-func applyModifiedArgs(args []any, modified map[string]any) []any {
+// applyModifiedArgs maps the enforcer's modified arguments back onto the call.
+// The shape follows how the call was sent (see normalizeToolArgs): one map
+// argument is sent as itself, anything else as arg0, arg1, and so on. It
+// returns false when the modification cannot be applied, so the caller refuses
+// the call instead of running the original, unmodified arguments.
+func applyModifiedArgs(args []any, modified map[string]any) ([]any, bool) {
 	if len(modified) == 0 {
-		return args
+		return nil, false
 	}
-	if values, ok := modified["args"].([]any); ok {
-		return values
-	}
-
 	if len(args) == 1 {
 		if _, ok := args[0].(map[string]any); ok {
-			return []any{modified}
+			return []any{modified}, true
 		}
+	}
+	if values, ok := modified["args"].([]any); ok {
+		return values, true
+	}
+	if len(args) == 1 {
 		if value, ok := modified["arg0"]; ok {
-			return []any{value}
+			return []any{value}, true
 		}
 		if value, ok := modified["input"]; ok {
-			return []any{value}
+			return []any{value}, true
 		}
 	}
 
@@ -426,7 +461,7 @@ func applyModifiedArgs(args []any, modified map[string]any) []any {
 		indexed[index] = value
 	}
 	if len(indexed) == 0 {
-		return args
+		return nil, false
 	}
 
 	indices := make([]int, 0, len(indexed))
@@ -435,14 +470,14 @@ func applyModifiedArgs(args []any, modified map[string]any) []any {
 	}
 	sort.Ints(indices)
 	if indices[0] != 0 || indices[len(indices)-1] != len(indices)-1 {
-		return args
+		return nil, false
 	}
 
 	out := make([]any, len(indices))
 	for _, index := range indices {
 		out[index] = indexed[index]
 	}
-	return out
+	return out, true
 }
 
 func normalizeToolArgs(args []any) map[string]any {

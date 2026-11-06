@@ -1265,3 +1265,96 @@ func contains(s, sub string) bool {
 		return false
 	}())
 }
+
+// The outside-recipient guard holds a call while outbound redaction still runs,
+// so the enforcer returns the hold token next to the redacted arguments. The
+// hold itself only resolves to ALLOW; the approved call must run redacted.
+func TestWrapToolStepUp_ApprovedCallRunsWithTheArgumentsRedactedWhenHeld(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == enforcePath:
+			_ = json.NewEncoder(w).Encode(enforcerResponse{
+				Decision:         "STEP_UP",
+				HoldToken:        "tok-redacted",
+				ModifiedToolArgs: map[string]any{"to": "out@example.com", "body": "[REDACTED]"},
+			})
+		case strings.HasPrefix(r.URL.Path, "/v1/enforce/hold/"):
+			_, _ = w.Write([]byte(`{"resolved":true,"resolution":"ALLOW"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	var got map[string]any
+	send := client.WrapToolFunc("send_email", func(_ context.Context, args map[string]any) (any, error) {
+		got = args
+		return "sent", nil
+	})
+
+	if _, err := send(context.Background(), map[string]any{"to": "out@example.com", "body": "card 4111"}); err != nil {
+		t.Fatalf("approved held call: unexpected error: %v", err)
+	}
+	if got["body"] != "[REDACTED]" {
+		t.Fatalf("approved held call ran with body %v, want the redacted arguments", got["body"])
+	}
+}
+
+func TestWrapToolModify_UnapplicableModificationRefusesTheCall(t *testing.T) {
+	for name, modified := range map[string]map[string]any{
+		"no arguments":         nil,
+		"empty arguments":      {},
+		"unknown shape":        {"unrelated": 1},
+		"indexes without arg0": {"arg1": "b"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := mockEnforcer(t, enforcerResponse{
+				Decision:              "ALLOW",
+				AuthorizationDecision: "MODIFY",
+				ModifiedToolArgs:      modified,
+			})
+			defer srv.Close()
+
+			client := newTestClient(t, srv.URL)
+			ran := false
+			echo := client.WrapTool("echo", func(_ context.Context, input string) (string, error) {
+				ran = true
+				return input, nil
+			})
+
+			_, err := echo(context.Background(), "original")
+			var pve *sdk.PolicyViolationError
+			if !errors.As(err, &pve) {
+				t.Fatalf("expected *PolicyViolationError, got %T: %v", err, err)
+			}
+			if ran {
+				t.Fatal("the tool ran with the original arguments although the modification could not be applied")
+			}
+		})
+	}
+}
+
+func TestWrapToolFuncModify_ArgumentNamedArgsIsAParameter(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{
+		Decision:              "ALLOW",
+		AuthorizationDecision: "MODIFY",
+		ModifiedToolArgs:      map[string]any{"args": []any{"[REDACTED]"}, "to": "a@example.com"},
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	var got map[string]any
+	run := client.WrapToolFunc("run", func(_ context.Context, args map[string]any) (any, error) {
+		got = args
+		return nil, nil
+	})
+
+	if _, err := run(context.Background(), map[string]any{"args": []any{"secret"}, "to": "a@example.com"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if list, _ := got["args"].([]any); len(list) != 1 || list[0] != "[REDACTED]" {
+		t.Fatalf("tool ran with args %v, want the modified parameter", got["args"])
+	}
+}

@@ -16,6 +16,13 @@ All notable changes to `thoth-go` are documented in this file.
 
 ### Fixed
 
+- A held call that is approved now runs with the arguments the enforcer redacted
+  when it held the call. The approval comes back as a plain ALLOW, so the call
+  used to start with the original arguments (an approved email to an outside
+  recipient was sent with its card number). A modification the SDK cannot map
+  back onto the call, or one that arrives with no arguments, now returns a
+  `PolicyViolationError` instead of running the original arguments, and a tool
+  with its own `args` parameter is no longer misread as the positional form.
 - A call the enforcer allows with its arguments redacted or filtered (outbound
   DLP redaction, or purpose-limited retrieval) now runs with the modified
   arguments. The enforcer sends that as `decision` ALLOW next to
