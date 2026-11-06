@@ -4,6 +4,16 @@ All notable changes to `thoth-go` are documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- A call the enforcer allows with its arguments redacted or filtered (outbound
+  DLP redaction, or purpose-limited retrieval) now runs with the modified
+  arguments. The enforcer sends that as `decision` ALLOW next to
+  `authorization_decision` MODIFY, and the SDK used to read only `decision`, so the
+  tool ran with the original arguments while the decision log said MODIFY. A
+  stricter `decision` (BLOCK, STEP_UP or DEFER) still wins. The TypeScript SDK
+  was not affected.
+
 ### Changed
 
 - `Config.APIURL` defaults to `DefaultAPIURL` (`https://api.atensecurity.com`),

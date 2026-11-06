@@ -484,6 +484,54 @@ func TestWrapToolModify_StringInput(t *testing.T) {
 	}
 }
 
+// The enforcer carries an argument modification as decision=ALLOW next to
+// authorization_decision=MODIFY. The tool must run with the modified arguments.
+func TestWrapToolModify_AllowWithAuthorizationModify(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{
+		Decision:              "ALLOW",
+		AuthorizationDecision: "MODIFY",
+		ModifiedToolArgs:      map[string]any{"input": "[REDACTED]"},
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	echo := client.WrapTool("echo", func(_ context.Context, input string) (string, error) {
+		return input, nil
+	})
+
+	out, err := echo(context.Background(), "password=hunter2")
+	if err != nil {
+		t.Fatalf("WrapTool(allow+modify): unexpected error: %v", err)
+	}
+	if out != "[REDACTED]" {
+		t.Fatalf("WrapTool(allow+modify): tool ran with %q, want the modified arguments", out)
+	}
+}
+
+// A stricter routing decision is never relaxed by authorization_decision=MODIFY.
+func TestWrapToolModify_StricterRoutingDecisionWins(t *testing.T) {
+	srv := mockEnforcer(t, enforcerResponse{
+		Decision:              "BLOCK",
+		AuthorizationDecision: "MODIFY",
+		ModifiedToolArgs:      map[string]any{"input": "[REDACTED]"},
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	ran := false
+	echo := client.WrapTool("echo", func(_ context.Context, input string) (string, error) {
+		ran = true
+		return input, nil
+	})
+
+	if _, err := echo(context.Background(), "original"); err == nil {
+		t.Fatal("WrapTool(block+modify): expected the call to be blocked")
+	}
+	if ran {
+		t.Fatal("WrapTool(block+modify): the tool ran although the routing decision was BLOCK")
+	}
+}
+
 func TestWrapToolFuncModify_MapArgs(t *testing.T) {
 	srv := mockEnforcer(t, enforcerResponse{
 		AuthorizationDecision: "MODIFY",

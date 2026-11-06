@@ -220,6 +220,17 @@ func normalizeEnforcementDecision(dec *EnforcementDecision) {
 		}
 	}
 
+	// The enforcer carries an argument modification as decision=ALLOW next to
+	// authorization_decision=MODIFY. Routing on decision alone would run the tool
+	// with its original arguments, so a MODIFY beside an ALLOW is a MODIFY. A
+	// stricter routing decision (BLOCK, STEP_UP, DEFER) is never relaxed.
+	if dec.Decision == DecisionAllow {
+		switch strings.ToUpper(strings.TrimSpace(dec.AuthorizationDecision)) {
+		case "MODIFY", "MODIFIED", "TRANSFORM":
+			dec.Decision = DecisionModify
+		}
+	}
+
 	if dec.Reason == "" {
 		switch dec.Decision {
 		case DecisionModify:
