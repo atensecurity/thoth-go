@@ -206,8 +206,10 @@ func applyEnvFallbacks(cfg Config) Config {
 	if cfg.AgentID == "" {
 		cfg.AgentID = os.Getenv("THOTH_AGENT_ID")
 	}
+	// Config.APIURL, then THOTH_API_URL, then the default; blank values are ignored.
+	cfg.APIURL = strings.TrimSpace(cfg.APIURL)
 	if cfg.APIURL == "" {
-		cfg.APIURL = os.Getenv("THOTH_API_URL")
+		cfg.APIURL = strings.TrimSpace(os.Getenv("THOTH_API_URL"))
 	}
 	if cfg.APIURL == "" {
 		cfg.APIURL = DefaultAPIURL

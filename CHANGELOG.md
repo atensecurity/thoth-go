@@ -26,6 +26,9 @@ All notable changes to `thoth-go` are documented in this file.
 
 ### Changed
 
+- `Config.APIURL` and `THOTH_API_URL` ignore blank (whitespace-only) values, so
+  the order is always `Config.APIURL`, then `THOTH_API_URL`, then
+  `https://api.atensecurity.com`.
 - `Config.APIURL` defaults to `DefaultAPIURL` (`https://api.atensecurity.com`),
   the API for trial and self-serve workspaces, when neither `Config.APIURL` nor
   `THOTH_API_URL` is set. Previously `NewClient` returned an error. Enterprise
