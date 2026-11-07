@@ -4,6 +4,8 @@ All notable changes to `thoth-go` are documented in this file.
 
 ## Unreleased
 
+## 0.1.21 - 2026-11-06
+
 ### Added
 
 - When a held action is approved or denied, the decision and `PolicyViolationError`
