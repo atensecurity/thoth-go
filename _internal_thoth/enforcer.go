@@ -42,6 +42,11 @@ type enforcerRequest struct {
 	AuthContext          map[string]any  `json:"auth_context,omitempty"`
 	DelegationContext    map[string]any  `json:"delegation_context,omitempty"`
 	Metadata             map[string]any  `json:"metadata,omitempty"`
+	// ClientFindings is what the local scan found in the raw arguments (data
+	// handling withholding them). Never values.
+	ClientFindings *ClientFindings `json:"client_findings,omitempty"`
+	// DataHandling declares what this client withheld before sending.
+	DataHandling map[string]any `json:"data_handling,omitempty"`
 }
 
 // EnforcerClient calls the Thoth enforcement service to obtain a pre-execution decision.
@@ -50,6 +55,51 @@ type EnforcerClient struct {
 	apiKey   string
 	failOpen bool
 	http     *http.Client
+	// dataHandling is nil unless the client withholds values at the source.
+	dataHandling *DataHandling
+}
+
+// WithDataHandling sets the source-side data handling applied to every request.
+// Call it before the client is shared.
+func (c *EnforcerClient) WithDataHandling(dh *DataHandling) *EnforcerClient {
+	c.dataHandling = dh
+	return c
+}
+
+// applyDataHandling scans the raw arguments, then withholds the values and
+// declares it. It runs last, so nothing added to the request earlier reaches
+// the wire untransformed.
+func (c *EnforcerClient) applyDataHandling(req *enforcerRequest) {
+	dh := c.dataHandling
+	if dh == nil {
+		return
+	}
+	if dh.ScansLocally() {
+		// Only counts, categories, hostnames and recipient domains are reported;
+		// a check that cannot finish is left out so Thoth sees it as missing.
+		if scanner := LoadScanner(); scanner != nil {
+			var raw any = req.ToolArgs
+			if req.ToolArgs == nil {
+				raw = map[string]any{}
+			}
+			req.ClientFindings = scanner.ClientFindings(req.ToolName, raw, req.Metadata)
+		}
+	}
+	if dh.ToolArguments != "" && req.ToolArgs != nil {
+		if keep, next := TransformArguments(req.ToolArgs, dh.ToolArguments, dh.Salt); keep {
+			req.ToolArgs, _ = next.(map[string]any)
+		} else {
+			req.ToolArgs = nil
+		}
+	}
+	if dh.Prompts != "" {
+		req.IdentityBinding = dh.transformContextField(req.IdentityBinding)
+		req.TaskContext = dh.transformContextField(req.TaskContext)
+		req.AuthContext = dh.transformContextField(req.AuthContext)
+		req.DelegationContext = dh.transformContextField(req.DelegationContext)
+		req.Metadata = dh.transformContextField(req.Metadata)
+	}
+	req.DataHandling = dh.Declaration()
 }
 
 // NewEnforcerClient creates an EnforcerClient with a 5-second HTTP timeout.
@@ -134,6 +184,7 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 			reqBody.AuthContext["service_identity"] = runtimeIdentity
 		}
 	}
+	c.applyDataHandling(&reqBody)
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
 		return fallbackDecision, fmt.Errorf("thoth: enforcer marshal: %w", err)

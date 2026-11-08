@@ -39,7 +39,7 @@ func NewTracer(cfg Config, session *SessionContext, emitter Emitter) *Tracer {
 		cfg:           cfg,
 		session:       session,
 		emitter:       emitter,
-		enforcer:      NewEnforcerClient(cfg.EnforcerURL, cfg.APIKey, cfg.FailOpen),
+		enforcer:      NewEnforcerClient(cfg.EnforcerURL, cfg.APIKey, cfg.FailOpen).WithDataHandling(cfg.DataHandling),
 		stepUp:        NewStepUpClient(cfg.EnforcerURL, cfg.APIKey, 0),
 		stepUpTimeout: defaultStepUpTimeout,
 		tools:         make(map[string]ToolFunc),
@@ -194,6 +194,9 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			}
 			return nil, policyViolationFromDecision(name, reason, dec)
 		case DecisionModify:
+			if t.cfg.DataHandling.ArgumentsWithheld() {
+				return nil, t.rewriteRefused(name, dec, sessionToolCalls, startedAt, baseMetadata)
+			}
 			modifiedArgs, ok := applyModifiedArgs(args, dec.ModifiedToolArgs)
 			if !ok {
 				return nil, t.modificationNotApplied(name, dec, sessionToolCalls, startedAt, baseMetadata)
@@ -245,6 +248,12 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 				t.emitBlockEvent(name, unresolved, sessionToolCalls, startedAt, baseMetadata)
 				return nil, policyViolationFromDecision(name, unresolved.Reason, unresolved)
 			}
+			// The server only saw hashes or placeholders for withheld arguments, so
+			// it never sends a rewrite for them; one that arrives, on the decision
+			// or on the approved hold, is a server or contract problem.
+			if t.cfg.DataHandling.ArgumentsWithheld() && (stepDec.Decision == DecisionModify || len(dec.ModifiedToolArgs) > 0) {
+				return nil, t.rewriteRefused(name, mergeDecisionContext(stepDec, dec), sessionToolCalls, startedAt, baseMetadata)
+			}
 			// A held call that is approved comes back as a plain ALLOW, so the
 			// arguments the enforcer redacted when it held the call are on the
 			// initial decision.
@@ -288,6 +297,22 @@ func (t *Tracer) modificationNotApplied(
 	return policyViolationFromDecision(name, dec.Reason, dec)
 }
 
+// rewriteRefused refuses a call whose arguments were withheld from Thoth but
+// whose decision carries an argument rewrite. A rewrite would feed hashes or
+// placeholders into the tool, and running the original arguments would hide a
+// server or contract problem, so the tool does not run.
+func (t *Tracer) rewriteRefused(
+	name string,
+	dec EnforcementDecision,
+	sessionToolCalls []string,
+	startedAt time.Time,
+	baseMetadata map[string]any,
+) error {
+	dec.Reason = "the server returned an argument rewrite although argument values were withheld (data handling); this indicates a server or contract problem; the call was not run"
+	t.emitBlockEvent(name, dec, sessionToolCalls, startedAt, baseMetadata)
+	return policyViolationFromDecision(name, dec.Reason, dec)
+}
+
 func (t *Tracer) logDecision(
 	toolName,
 	traceID,
@@ -295,6 +320,9 @@ func (t *Tracer) logDecision(
 	decision EnforcementDecision,
 	phase string,
 ) {
+	if decision.DecisionReasonCode == ArgsWithheld {
+		log.Printf("thoth: WARN: %s held (args_withheld): %s", toolName, ArgsWithheldNote)
+	}
 	if !shouldLogDecisionDebug() {
 		return
 	}
@@ -403,7 +431,19 @@ func mergeDecisionContext(primary, fallback EnforcementDecision) EnforcementDeci
 	return merged
 }
 
+// ArgsWithheld is the decision reason code for a call held because Thoth was
+// not sent the argument values a rule needed.
+const ArgsWithheld = "args_withheld"
+
+// ArgsWithheldNote says what to do about an args_withheld hold.
+const ArgsWithheldNote = "Thoth was not sent this call's argument values (data handling is set to withhold them), so a rule that needs the " +
+	"values could not be checked and the call was held for review. Approve it, or change the data handling setting " +
+	"(THOTH_DATA_HANDLING_TOOL_ARGUMENTS) if value-based rules should run."
+
 func policyViolationFromDecision(toolName, reason string, decision EnforcementDecision) *PolicyViolationError {
+	if decision.DecisionReasonCode == ArgsWithheld && !strings.Contains(reason, ArgsWithheldNote) {
+		reason = fmt.Sprintf("%s [args_withheld: %s]", reason, ArgsWithheldNote)
+	}
 	authDecision := coalesceNonEmpty(decision.AuthorizationDecision, string(decision.Decision))
 	return &PolicyViolationError{
 		ToolName:                toolName,

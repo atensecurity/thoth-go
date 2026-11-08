@@ -4,6 +4,45 @@ All notable changes to `thoth-go` are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Opt-in withholding of values at the source. Set `Config.DataHandlingToolArguments`
+  (`hash`, `redact` or `drop`) and `Config.DataHandlingPrompts` (`hash` or `drop`), or the
+  environment variables `THOTH_DATA_HANDLING_TOOL_ARGUMENTS`,
+  `THOTH_DATA_HANDLING_PROMPTS` and `THOTH_DATA_HANDLING_SALT`. Hashes are
+  HMAC-SHA256 with a client-held salt (`Config.DataHandlingSalt`, else a random
+  per-process salt). The enforce request declares what was applied in
+  `data_handling`, a rule that needs argument values holds the call
+  (`args_withheld`) and says why, and modified arguments are never applied to a
+  call whose arguments were withheld: if the server returns a rewrite anyway,
+  including on an approved hold, the call fails closed (the tool does not run,
+  `*PolicyViolationError`) because that is a server or contract problem. Nothing
+  changes when unset; an invalid value makes `NewClient` return an error. No new
+  dependencies. A whole-number float hashes as an integer (`3.0` is `3`), as in the
+  TypeScript SDK.
+- Local scanning when tool arguments are withheld. With
+  `DataHandlingToolArguments` set to `hash`, `redact` or `drop`, the SDK scans the
+  raw arguments (and the destination host in `RequestMetadata`) in your process
+  before withholding them, and sends `client_findings` next to `data_handling`:
+  counts and categories of credentials, email addresses, phone numbers, SSN-shaped
+  numbers and confidentiality phrases, whether a path looks sensitive, a
+  destination hostname, and recipient domains. The report never contains values,
+  paths, local parts or display names. The detectors are heuristic. The scanner
+  identifies itself as `atensec-thoth-go` with ruleset `thoth-detectors.v1`,
+  ruleset hash
+  `db797fde60f300719b9dac8a360efd6ce8b1f7313587cc714aebf7a93428434b`; a workspace
+  relies on the report only after it sets `accept_local_scan` and lists that hash
+  in `accepted_scanner_ruleset_hashes`. A check that fails, hits the depth or value
+  bound, or would not fit the 4 KB limit is left out of `scanned` instead of
+  reported clean. `THOTH_DATA_HANDLING_LOCAL_SCAN=off` (or
+  `DataHandlingLocalScan: "off"`) sends no findings. A workspace with
+  `require_client_findings` holds calls from a client that withholds arguments and
+  sends no findings. The detector spec is embedded in the module and refused if it
+  does not match its hash. Go maps have no order, so keys are read in sorted order:
+  recipient domains from different fields are listed in that order.
+- `PolicyViolationError.Reason` explains an `args_withheld` hold and points to
+  `THOTH_DATA_HANDLING_TOOL_ARGUMENTS`.
+
 ## 0.1.21 - 2026-11-06
 
 ### Added

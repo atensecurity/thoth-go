@@ -22,6 +22,7 @@ type Session struct {
 // StartSession creates a new agent session.
 func (c *Client) StartSession(ctx context.Context, agentID, sessionID string) (*Session, error) {
 	internalCfg := toInternalConfig(c.cfg)
+	internalCfg.DataHandling = c.dh
 	if agentID != "" {
 		internalCfg.AgentID = agentID
 	}

@@ -54,6 +54,10 @@
 //	THOTH_REQUEST_METADATA_JSON — optional JSON metadata merged into enforce payload
 //	THOTH_LOG_LEVEL — optional SDK decision-log level override (falls back to LOG_LEVEL)
 //	THOTH_FAIL_OPEN — when true, enforcer transport/5xx/429 failures allow tool execution
+//	THOTH_DATA_HANDLING_TOOL_ARGUMENTS — opt-in: hash, redact or drop tool-argument values before they leave the process
+//	THOTH_DATA_HANDLING_PROMPTS — opt-in: hash or drop prompt-bearing text in the context maps you pass
+//	THOTH_DATA_HANDLING_SALT — client-held salt for hash (never sent); default is a random per-process salt
+//	THOTH_DATA_HANDLING_LOCAL_SCAN — on (default) or off: with arguments withheld, scan them locally and send client_findings
 package thoth
 
 import (
@@ -196,6 +200,34 @@ type Config struct {
 	// unavailable (network error, 429, or 5xx). Auth failures still block.
 	// Env fallback: THOTH_FAIL_OPEN.
 	FailOpen bool
+
+	// DataHandlingToolArguments is opt-in withholding of tool-argument values
+	// at the source: "hash" replaces every value with a keyed hash and keeps
+	// the keys, "redact" with "<redacted>" and keeps the keys, "drop" sends no
+	// arguments. An invalid value makes NewClient return an error. Empty sends
+	// arguments as before.
+	// Env fallback: THOTH_DATA_HANDLING_TOOL_ARGUMENTS.
+	DataHandlingToolArguments string
+
+	// DataHandlingPrompts is opt-in: "hash" or "drop" prompt-bearing text in
+	// the context maps you pass (TaskContext, AuthContext, DelegationContext,
+	// IdentityBinding, RequestMetadata).
+	// Env fallback: THOTH_DATA_HANDLING_PROMPTS.
+	DataHandlingPrompts string
+
+	// DataHandlingSalt is the client-held salt for "hash". It is never sent to
+	// Thoth. Empty uses a random salt made once per process, so hashes match
+	// only within one process: set the same salt on every process that should
+	// be able to match values.
+	// Env fallback: THOTH_DATA_HANDLING_SALT.
+	DataHandlingSalt string
+
+	// DataHandlingLocalScan is "on" (the default) or "off". While tool
+	// arguments are withheld, "on" scans the raw arguments in this process and
+	// sends what was found (counts, categories, hostnames, recipient domains,
+	// never values) as client_findings. The scan is heuristic.
+	// Env fallback: THOTH_DATA_HANDLING_LOCAL_SCAN.
+	DataHandlingLocalScan string
 }
 
 func applyEnvFallbacks(cfg Config) Config {
@@ -341,6 +373,7 @@ func toInternalConfig(cfg Config) ithoth.Config {
 // Client is the primary entry point for the Thoth SDK.
 type Client struct {
 	cfg     Config
+	dh      *ithoth.DataHandling
 	tracer  *ithoth.Tracer
 	emitter ithoth.Emitter
 	http    *http.Client
@@ -356,7 +389,19 @@ const DefaultAPIURL = "https://api.atensecurity.com"
 // NewClient initializes a Thoth SDK client.
 func NewClient(cfg Config) (*Client, error) {
 	cfg = applyEnvFallbacks(cfg)
+	// Resolved before anything else: an invalid setting is an error here, never
+	// a fallback to sending values unprotected.
+	dh, err := ithoth.ResolveDataHandling(
+		cfg.DataHandlingToolArguments,
+		cfg.DataHandlingPrompts,
+		cfg.DataHandlingSalt,
+		cfg.DataHandlingLocalScan,
+	)
+	if err != nil {
+		return nil, err
+	}
 	internalCfg := toInternalConfig(cfg)
+	internalCfg.DataHandling = dh
 	emitter := ithoth.NewHTTPEmitterWithEventIngestToken(
 		internalCfg.APIURL,
 		internalCfg.APIKey,
@@ -367,6 +412,7 @@ func NewClient(cfg Config) (*Client, error) {
 
 	c := &Client{
 		cfg:     cfg,
+		dh:      dh,
 		tracer:  tracer,
 		emitter: emitter,
 		http:    &http.Client{Timeout: cfg.Timeout},

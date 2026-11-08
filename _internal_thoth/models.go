@@ -353,6 +353,10 @@ type Config struct {
 	// FailOpen allows tool execution when enforcement infrastructure is unavailable
 	// (network error, 429, or 5xx). Auth failures still block.
 	FailOpen bool
+
+	// DataHandling is the resolved source-side data handling (see
+	// ResolveDataHandling). Nil sends values as before.
+	DataHandling *DataHandling
 }
 
 // ApplyConfigDefaults fills in zero-value fields with sensible defaults.
