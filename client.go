@@ -448,6 +448,24 @@ func NewClient(cfg Config) (*Client, error) {
 	return c, nil
 }
 
+// Usage is the model usage of one or more model calls; see Client.ReportUsage.
+type Usage = ithoth.Usage
+
+// ReportUsage records the usage of a model call after it returns. The SDK sends it
+// with the next governed call (the next enforcement request) as prompt_tokens and
+// completion_tokens, and, only when you set CostUSD, as estimated_cost_usd, then
+// forgets it: usage is sent once. Several reports before one governed call add up.
+//
+// Thoth counts tokens first and never works dollars out from tokens; set CostUSD
+// only when you know the figure. Zero, negative and non-finite values are ignored,
+// and one report is capped at 10,000,000 tokens and $1,000. Reporting never fails
+// or blocks. A workspace's daily budget for the agent counts what you report.
+func (c *Client) ReportUsage(u Usage) {
+	if c != nil && c.tracer != nil {
+		c.tracer.ReportUsage(u)
+	}
+}
+
 // Close flushes buffered events and releases resources.
 func (c *Client) Close() {
 	if c.emitter != nil {

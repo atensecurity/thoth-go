@@ -6,6 +6,13 @@ All notable changes to `thoth-go` are documented in this file.
 
 ### Added
 
+- `Client.ReportUsage(thoth.Usage{PromptTokens, CompletionTokens, CostUSD})` reports the model
+  usage behind a governed call, so a workspace's daily budget for the agent has something to
+  count. It is sent with the next governed call as `prompt_tokens`, `completion_tokens` and,
+  only if you set `CostUSD`, `estimated_cost_usd`, then forgotten (sent once; resent if the call
+  did not reach the server). Tokens first: Thoth never works dollars out from tokens. Zero,
+  negative and non-finite values are ignored; one report is capped at 10,000,000 tokens and
+  $1,000. Additive: nothing changes unless you call it.
 - Opt-in withholding of values at the source. Set `Config.DataHandlingToolArguments`
   (`hash`, `redact` or `drop`) and `Config.DataHandlingPrompts` (`hash` or `drop`), or the
   environment variables `THOTH_DATA_HANDLING_TOOL_ARGUMENTS`,

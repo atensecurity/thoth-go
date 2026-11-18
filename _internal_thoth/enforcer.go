@@ -42,6 +42,10 @@ type enforcerRequest struct {
 	AuthContext          map[string]any  `json:"auth_context,omitempty"`
 	DelegationContext    map[string]any  `json:"delegation_context,omitempty"`
 	Metadata             map[string]any  `json:"metadata,omitempty"`
+	// Model usage reported with ReportUsage, sent once (usage.go).
+	PromptTokens     *int64   `json:"prompt_tokens,omitempty"`
+	CompletionTokens *int64   `json:"completion_tokens,omitempty"`
+	EstimatedCostUSD *float64 `json:"estimated_cost_usd,omitempty"`
 	// ClientFindings is what the local scan found in the raw arguments (data
 	// handling withholding them). Never values.
 	ClientFindings *ClientFindings `json:"client_findings,omitempty"`
@@ -57,6 +61,8 @@ type EnforcerClient struct {
 	http     *http.Client
 	// dataHandling is nil unless the client withholds values at the source.
 	dataHandling *DataHandling
+	// usage is the model usage waiting to ride on the next request.
+	usage pendingUsage
 }
 
 // WithDataHandling sets the source-side data handling applied to every request.
@@ -184,6 +190,16 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 			reqBody.AuthContext["service_identity"] = runtimeIdentity
 		}
 	}
+	usage := c.usage.take()
+	if usage != nil {
+		if usage.PromptTokens > 0 {
+			reqBody.PromptTokens = &usage.PromptTokens
+		}
+		if usage.CompletionTokens > 0 {
+			reqBody.CompletionTokens = &usage.CompletionTokens
+		}
+		reqBody.EstimatedCostUSD = usage.CostUSD
+	}
 	c.applyDataHandling(&reqBody)
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
@@ -202,6 +218,8 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		// The server did not see this call: its usage goes with the next one.
+		c.restoreUsage(usage)
 		if c.failOpen {
 			log.Printf("thoth: WARN: enforcer unreachable, fail-open fallback to ALLOW: %v", err)
 			return failOpenDecision, nil
@@ -212,6 +230,9 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+			c.restoreUsage(usage)
+		}
 		if c.failOpen && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError) {
 			log.Printf(
 				"thoth: WARN: enforcer returned retryable status %d, fail-open fallback to ALLOW",
@@ -242,6 +263,12 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 	}
 	normalizeEnforcementDecision(&dec)
 	return dec, nil
+}
+
+func (c *EnforcerClient) restoreUsage(u *Usage) {
+	if u != nil {
+		c.usage.add(*u)
+	}
 }
 
 func normalizeEnforcementDecision(dec *EnforcementDecision) {
