@@ -3,11 +3,13 @@ package thoth_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -229,6 +231,35 @@ func TestEnforcerClient_AuthFailureStillBlocksInFailOpen(t *testing.T) {
 	}
 	if dec.Decision != thoth.DecisionBlock {
 		t.Errorf("decision = %q, want %q", dec.Decision, thoth.DecisionBlock)
+	}
+}
+
+func TestEnforcerClient_OversizedRequestBlocksLocallyWithoutSending(t *testing.T) {
+	t.Parallel()
+	for _, failOpen := range []bool{false, true} {
+		hits := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits++
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		client := thoth.NewEnforcerClient(srv.URL, "", failOpen)
+		dec, err := client.Check(context.Background(), thoth.CheckRequest{
+			ToolName:  "tool",
+			SessionID: "sess-1",
+			ToolArgs:  map[string]any{"blob": strings.Repeat("a", thoth.MaxRequestBytes+1)},
+		})
+		srv.Close()
+
+		if !errors.Is(err, thoth.ErrRequestTooLarge) {
+			t.Fatalf("failOpen=%v: err = %v, want ErrRequestTooLarge", failOpen, err)
+		}
+		if dec.Decision != thoth.DecisionBlock {
+			t.Errorf("failOpen=%v: decision = %q, want BLOCK", failOpen, dec.Decision)
+		}
+		if hits != 0 {
+			t.Errorf("failOpen=%v: server was hit %d times", failOpen, hits)
+		}
 	}
 }
 

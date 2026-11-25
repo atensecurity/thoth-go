@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -206,6 +207,14 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 		return fallbackDecision, fmt.Errorf("thoth: enforcer marshal: %w", err)
 	}
 
+	// A body over the enforcer's limit is refused here and never sent: the server answers 413
+	// but may reset the connection while we are still uploading, which would look like a
+	// transport failure, and fail-open treats that as allow.
+	if len(buf) > MaxRequestBytes {
+		log.Printf("thoth: ERROR: request of %d bytes is over the %d-byte enforcer limit, blocked locally", len(buf), MaxRequestBytes)
+		return requestTooLargeDecision(), ErrRequestTooLarge
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/enforce", bytes.NewReader(buf))
 	if err != nil {
 		return fallbackDecision, fmt.Errorf("thoth: enforcer request build: %w", err)
@@ -318,4 +327,17 @@ func normalizeEnforcementDecision(dec *EnforcementDecision) {
 			dec.Reason = dec.DeferReason
 		}
 	}
+}
+
+// MaxRequestBytes is the enforcer's default request limit.
+const MaxRequestBytes = 4 * 1024 * 1024
+
+// ErrRequestTooLarge reports a request refused locally for its size (reason code
+// enforcer_request_too_large).
+var ErrRequestTooLarge = errors.New("thoth: enforcer_request_too_large: the request is larger than the enforcer accepts")
+
+func requestTooLargeDecision() EnforcementDecision {
+	d := fallbackDecision
+	d.Reason = "enforcer_request_too_large: the request is larger than the enforcer accepts, so the action is not allowed; use smaller tool arguments or ask a reviewer for a held action"
+	return d
 }
