@@ -246,7 +246,7 @@ func TestClientFindingsOnTheWire(t *testing.T) {
 	report := body["client_findings"].(map[string]any)
 	scanner := report["scanner"].(map[string]any)
 	if scanner["name"] != "atensec-thoth-go" || scanner["ruleset_id"] != "thoth-detectors.v1" ||
-		scanner["ruleset_hash"] != "db797fde60f300719b9dac8a360efd6ce8b1f7313587cc714aebf7a93428434b" || scanner["version"] == "" {
+		scanner["ruleset_hash"] != "9e7e25ec9d1f280b12f6006726cfc9efdaf5a0dc24585b08eb513e140ff3ae46" || scanner["version"] == "" {
 		t.Errorf("scanner = %v", scanner)
 	}
 	if report["version"] != float64(1) || asJSON(t, report["scanned"]) != `["dlp","sensitive_path","egress_host","recipient"]` {

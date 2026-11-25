@@ -10,7 +10,7 @@ import (
 	"unicode"
 )
 
-const pinnedRulesetHash = "db797fde60f300719b9dac8a360efd6ce8b1f7313587cc714aebf7a93428434b"
+const pinnedRulesetHash = "9e7e25ec9d1f280b12f6006726cfc9efdaf5a0dc24585b08eb513e140ff3ae46"
 
 type goldenCase struct {
 	ID        string         `json:"id"`
@@ -147,8 +147,8 @@ func TestGoldenCases(t *testing.T) {
 			t.Errorf("golden has no %q group", g)
 		}
 	}
-	if len(cases) != 174 {
-		t.Errorf("%d golden cases, want 174", len(cases))
+	if len(cases) != 216 {
+		t.Errorf("%d golden cases, want 216", len(cases))
 	}
 	for _, c := range cases {
 		if c.Group == "known_divergence" {
@@ -207,6 +207,9 @@ func TestKnownDivergenceCasesPinTheGoAnswers(t *testing.T) {
 		"known_divergence.cjk_before_email":             email,
 		"known_divergence.arabic_indic_digits_ssn":      {},
 		"known_divergence.nbsp_in_phone":                {},
+		"known_divergence.arabic_indic_digit_mrn":       {},
+		"known_divergence.fullwidth_digits_dob":         {},
+		"known_divergence.nbsp_between_label_and_date":  {},
 		"known_divergence.recipient_kelvin_sign_domain": {{"kind": "recipient", "status": "outside", "data_move": false, "domains": []string{"k.com"}}},
 	}
 	seen := map[string]bool{}
