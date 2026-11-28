@@ -147,7 +147,11 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 			var finalDecision *EnforcementDecision
 			dec, err := t.enforcer.Check(ctx, checkReq)
 			if err != nil {
-				log.Printf("thoth: observe: enforcer unavailable for %q: %v", name, err)
+				reason := dec.Reason
+				if reason == "" {
+					reason = "enforcer unavailable"
+				}
+				log.Printf("thoth: observe: %s for %q: %v", reason, name, err)
 			} else {
 				t.logDecision(
 					name,
@@ -164,7 +168,11 @@ func (t *Tracer) buildWrapped(name string, fn ToolFunc) ToolFunc {
 		dec, err := t.enforcer.Check(ctx, checkReq)
 		if err != nil {
 			log.Printf("thoth: warn: enforcer check failed for %q: %v", name, err)
-			dec = fallbackDecision
+			// Keep a specific blocking reason from the client (request could not be built,
+			// response not understood, rejected); anything else gets the generic fallback.
+			if dec.Decision != DecisionBlock || dec.Reason == "" {
+				dec = fallbackDecision
+			}
 		}
 		t.logDecision(
 			name,

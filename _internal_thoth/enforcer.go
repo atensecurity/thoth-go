@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -204,7 +205,10 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 	c.applyDataHandling(&reqBody)
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
-		return fallbackDecision, fmt.Errorf("thoth: enforcer marshal: %w", err)
+		// Never sent: its usage goes with the next call. Class only, no arguments in logs.
+		c.restoreUsage(usage)
+		log.Printf("thoth: ERROR: request could not be built (%T), blocked locally", err)
+		return requestNotBuiltDecision(), fmt.Errorf("thoth: enforcer marshal: %w", err)
 	}
 
 	// A body over the enforcer's limit is refused here and never sent: the server answers 413
@@ -212,12 +216,14 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 	// transport failure, and fail-open treats that as allow.
 	if len(buf) > MaxRequestBytes {
 		log.Printf("thoth: ERROR: request of %d bytes is over the %d-byte enforcer limit, blocked locally", len(buf), MaxRequestBytes)
+		c.restoreUsage(usage)
 		return requestTooLargeDecision(), ErrRequestTooLarge
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/enforce", bytes.NewReader(buf))
 	if err != nil {
-		return fallbackDecision, fmt.Errorf("thoth: enforcer request build: %w", err)
+		c.restoreUsage(usage)
+		return requestNotBuiltDecision(), fmt.Errorf("thoth: enforcer request build: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -254,24 +260,78 @@ func (c *EnforcerClient) Check(ctx context.Context, check CheckRequest) (Enforce
 		}
 		err = fmt.Errorf("thoth: enforcer returned HTTP %d", resp.StatusCode)
 		log.Printf("thoth: ERROR: %v, fail-closed fallback to BLOCK", err)
-		return fallbackDecision, err
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+			return EnforcementDecision{
+				Decision: DecisionBlock,
+				Reason:   fmt.Sprintf("enforcer unavailable (status=%d)", resp.StatusCode),
+			}, err
+		}
+		return EnforcementDecision{
+			Decision: DecisionBlock,
+			Reason:   fmt.Sprintf("enforcer rejected request (status=%d)", resp.StatusCode),
+		}, err
+	}
+
+	// A failure while reading the body (stall, reset, short read) is a network failure:
+	// treat it like any transport error. A body read in full that cannot be decoded is not.
+	// The read is bounded: a reply over the limit is a contract failure, never an allow.
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if readErr == nil && int64(len(raw)) > maxResponseBytes {
+		log.Printf("thoth: ERROR: enforcer response over the %d-byte limit (status=%d), blocked in both modes", maxResponseBytes, resp.StatusCode)
+		return EnforcementDecision{
+			Decision: DecisionBlock,
+			Reason:   "enforcer response not understood",
+		}, fmt.Errorf("thoth: enforcer response not understood (HTTP %d, over size limit)", resp.StatusCode)
+	}
+	if readErr != nil {
+		// Usage is put back even though a stalled reply may mean the server already
+		// counted the call (inferred, not verified): we fail toward not losing usage,
+		// at the risk of counting one call twice.
+		c.restoreUsage(usage)
+		if c.failOpen {
+			log.Printf("thoth: WARN: enforcer response read failed, fail-open fallback to ALLOW: %v", readErr)
+			return failOpenDecision, nil
+		}
+		log.Printf("thoth: ERROR: enforcer response read failed, fail-closed fallback to BLOCK: %v", readErr)
+		return fallbackDecision, fmt.Errorf("thoth: enforcer response read: %w", readErr)
 	}
 
 	var dec EnforcementDecision
-	if decodeErr := json.NewDecoder(resp.Body).Decode(&dec); decodeErr != nil {
-		if c.failOpen {
-			log.Printf("thoth: WARN: enforcer decode failed, fail-open fallback to ALLOW: %v", decodeErr)
-			return failOpenDecision, nil
-		}
-		err = fmt.Errorf("thoth: enforcer decode: %w", decodeErr)
-		log.Printf("thoth: ERROR: %v, fail-closed fallback to BLOCK", err)
-		return fallbackDecision, err
+	decodeErr := decodeSingleJSON(raw, &dec)
+	if decodeErr != nil {
+		// The enforcer answered, so this is not an outage: fail-open does not apply.
+		// Log the error class and status only, never the response body. The server saw
+		// the call, so its usage is not restored (as for a 4xx).
+		log.Printf("thoth: ERROR: enforcer response not understood (status=%d, %T), blocked in both modes", resp.StatusCode, decodeErr)
+		return EnforcementDecision{
+			Decision: DecisionBlock,
+			Reason:   "enforcer response not understood",
+		}, fmt.Errorf("thoth: enforcer response not understood (HTTP %d)", resp.StatusCode)
 	}
 	if dec.ActionAttestationID == "" {
 		dec.ActionAttestationID = actionAttestationID
 	}
 	normalizeEnforcementDecision(&dec)
 	return dec, nil
+}
+
+// decodeSingleJSON decodes exactly one JSON object: trailing data and null are refused.
+func decodeSingleJSON(raw []byte, dst *EnforcementDecision) error {
+	if string(bytes.TrimSpace(raw)) == "null" {
+		return errors.New("null body")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("trailing data after JSON value")
+	}
+	return nil
+}
+
+func requestNotBuiltDecision() EnforcementDecision {
+	return EnforcementDecision{Decision: DecisionBlock, Reason: "request could not be built"}
 }
 
 func (c *EnforcerClient) restoreUsage(u *Usage) {
@@ -330,6 +390,12 @@ func normalizeEnforcementDecision(dec *EnforcementDecision) {
 }
 
 // MaxRequestBytes is the enforcer's default request limit.
+// DefaultMaxResponseBytes caps how much of an enforcer reply the SDK reads (16 MiB).
+const DefaultMaxResponseBytes int64 = 16 * 1024 * 1024
+
+// maxResponseBytes is a variable so tests can lower it.
+var maxResponseBytes = DefaultMaxResponseBytes
+
 const MaxRequestBytes = 4 * 1024 * 1024
 
 // ErrRequestTooLarge reports a request refused locally for its size (reason code
